@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Report a bug encountered while using websoft9's product
+about: Report a bug encountered while using ERPNext Docker deployment
 labels: bug
 ---
 
@@ -10,46 +10,50 @@ A clear and concise description of what the bug is.
 
 ## Deployment method
 
-- [ ] subscription image from MarketPlace of Cloud
-- [ ] All-in-one Installer
-- [ ] ansible-playbook cli
-- [ ] mcloud
-- [ ] create instance from private image
+- [ ] Docker Compose
+- [ ] Docker Swarm
+- [ ] Kubernetes
+- [ ] Other (please describe)
 
 ## Bug source
 
 - [ ] Bugs from installation 
 - [ ] Bugs from first use
-- [ ] Other (You should describe it)   
+- [ ] Configuration issues
+- [ ] Other (please describe)   
 
 ## System Environment
 
-**Application Version**
+**ERPNext Version**
 
-e.g v4.5
+e.g v14, v13, v12
+
+**Docker Version**
+```
+docker --version
+docker-compose --version
+```
 
 **OS**
 
-- [ ] Ubuntu18.x
-- [ ] Ubuntu20.x
-- [ ] CentOS7.x
-- [ ] CentOS8.x
-- [ ] AmazonLinux2
-- [ ] OracleLinux7.8
-- [ ] OracleLinux8.2
-- [ ] Other (You should describe it) 
+- [ ] Ubuntu 20.04
+- [ ] Ubuntu 22.04
+- [ ] Debian 11
+- [ ] CentOS 7
+- [ ] CentOS 8/Rocky/AlmaLinux
+- [ ] macOS
+- [ ] Windows with WSL2
+- [ ] Other (please describe)
 
-**Cloud PlatForm**
+**Infrastructure**
 
+- [ ] Local machine
+- [ ] AWS
 - [ ] Azure
-- [ ] Aws
-- [ ] 阿里云
-- [ ] 腾讯云
-- [ ] 华为云
-- [ ] AlibabaCloud
-- [ ] HUWEICloud
-- [ ] Other (You should describe it) 
-
+- [ ] Google Cloud
+- [ ] DigitalOcean
+- [ ] Self-hosted server
+- [ ] Other (please describe)
 
 ## Bug reproduce
 
@@ -70,10 +74,10 @@ Bug context includes bug error, error logs and service status, it is very import
 # bug error
 (paste here) 
 
-# service status 
+# docker-compose logs output
 (paste here) 
 
-# error logs
+# service status (docker ps)
 (paste here) 
 ```
 
@@ -83,14 +87,14 @@ paste screenshot here
 
 ## Your suggestion
 
-**The reason of Bug**
+**Expected behavior**
 
-You can describe the reason if you have found it
+A clear and concise description of what you expected to happen.
 
-**Your solution for Bug**
+**Possible solution**
 
-You can describe your solution here
+If you have a solution in mind, please describe it here.
 
 **Additional context**
 
-You can add any other context about the problem here.
+Add any other context about the problem here.

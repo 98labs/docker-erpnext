@@ -1,57 +1,30 @@
 # ERPNext on Docker
 
-![](https://libs.websoft9.com/common/websott9-cloud-installer.png) 
-
 ## Introduction
 
-[English](/README.md) | [简体中文](/README-zh.md)  
-
-This repository is an **Cloud Native solution** powered by [Websoft9](https://www.websoft9.com), it simplifies the complicated installation and initialization process.  
+This repository provides a Docker-based deployment solution for ERPNext, simplifying the installation and initialization process.
 
 ## System Requirements
 
 The following are the minimal [recommended requirements](https://github.com/frappe/bench):
 
-* **OS**: Red Hat, CentOS, Debian, Ubuntu or other's Linux OS
-* **Public Cloud**: More than 20+ major Cloud such as AWS, Azure, Google Cloud, Alibaba Cloud, HUAWEIClOUD, Tencent Cloud
+* **OS**: Red Hat, CentOS, Debian, Ubuntu or other Linux OS
+* **Public Cloud**: AWS, Azure, Google Cloud, Alibaba Cloud, and other major cloud providers
 * **Private Cloud**: KVM, VMware, VirtualBox, OpenStack
-* **ARCH**:  Linux x86-64, ARM 32/64, Windows x86-64, IBM POWER8, x86/i686
+* **ARCH**: Linux x86-64, ARM 32/64, Windows x86-64, IBM POWER8, x86/i686
 * **RAM**: 8 GB or more
 * **CPU**: 2 cores or higher
 * **HDD**: at least 20 GB of free space
 * **Swap file**: at least 2 GB
-* **bandwidth**: more fluent experience over 100M  
+* **Bandwidth**: more fluent experience over 100M
 
 ## QuickStart
 
-### All-in-one Installer
+### Prerequisites
 
-Use SSH to connect your instance and run the automatic installation script below
+If you have not installed Docker and Docker-Compose, refer to the following commands to install it:
 
-```
-sudo wget -N https://raw.githubusercontent.com/Websoft9/StackHub/main/docker-installer.sh; sudo bash docker-installer.sh -r erpnext
-```
-### package install
-
-1.Make package
-You can get the  package as following script
-```
-sudo wget -N https://raw.githubusercontent.com/Websoft9/StackHub/main/docker-installer.sh; sudo bash docker-installer.sh -r erpnext -p
-```
-
-2.Install by package
-Copy package to your server, Use SSH to connect your instance and run the automatic installation script below
-```
-sudo bash install-erpnext
-```
-
-### Manual Installation
-
-#### Preparation
-
-If you have not install Docker and Docker-Compose, refer to the following commands to install it:
-
-```
+```bash
 curl -fsSL https://get.docker.com -o get-docker.sh && sh get-docker.sh
 sudo systemctl enable docker
 sudo systemctl start docker
@@ -60,51 +33,101 @@ echo "alias docker-compose='docker compose'" >> /etc/profile.d/docker-compose.sh
 source /etc/profile.d/docker-compose.sh
 ```
 
-#### Install ERPNext
+### Install ERPNext
 
-We assume that you are already familiar with Docker, and you can modify [docker-compose file](docker-compose.yml) by yourself
-
-```
-git clone --depth=1 https://github.com/Websoft9/docker-erpnext
+1. Clone the repository:
+```bash
+git clone --depth=1 https://github.com/98labs/docker-erpnext
 cd docker-erpnext
-public_ip=`wget -O - https://download.websoft9.com/ansible/get_ip.sh | bash`  
-sudo sed -i s/erp.example.com/$public_ip/g ./.env  
-docker network create websoft9 
-docker compose  up -d
 ```
 
-### FAQ
+2. Create the Docker network:
+```bash
+docker network create erpnext-local
+```
 
-#### Do I need to change the password before docker-compose up?
-Yes, you should modify all database password and application password at docker-compose file for production
+3. Configure environment variables (optional):
+Edit the `.env` file to customize your deployment:
+- `APP_PASSWORD`: Administrator password (default: LocalDev123!)
+- `APP_HTTP_PORT`: HTTP port (default: 8080)
+- `APP_VERSION`: ERPNext version (v12, v13, or v14)
 
-#### Docker runing failed for the reason that port conflict?
-You should modify ports at [docker-compose file](docker-compose-production.yml) and docker-compose again
+4. Start the services:
+```bash
+docker-compose up -d
+```
 
-### Usage instructions
+## Usage
 
-You can point your browser to: *`http://Instance's Internet IP:port`*  
+After deployment, you can access ERPNext at: `http://localhost:8080` (or your configured port)
 
-The following is the information that may be needed during use
+### Default Credentials
 
-#### Credentials
+| Username | Password |
+| -------- | -------- |
+| Administrator | LocalDev123! |
 
-By default, the available users are:
+### Services and Ports
 
-| Username    | Password |
-| ------- | -------- |
-|  Administrator | admin  |
+| Service | Port | Use | Necessity |
+| ------- | ---- | --- | --------- |
+| ERPNext Web | 8080 | Browser access to ERPNext | Y |
+| MariaDB | 3306 | Database access | Y |
+
+### Common Operations
+
+#### Viewing Logs
+```bash
+# All services
+docker-compose logs -f
+
+# Specific service
+docker-compose logs -f backend
+```
+
+#### Accessing the Backend Shell
+```bash
+docker exec -it erpnext-backend /bin/bash
+```
+
+#### Bench Commands
+From within the backend container:
+```bash
+# Access Frappe/ERPNext console
+bench --site frontend console
+
+# Clear cache
+bench --site frontend clear-cache
+
+# Run migrations
+bench --site frontend migrate
+```
+
+## FAQ
+
+### Do I need to change the password before docker-compose up?
+Yes, you should modify all database passwords and application passwords in the `.env` file for production use.
+
+### Docker running failed due to port conflict?
+You should modify the `APP_HTTP_PORT` in the `.env` file and run `docker-compose up -d` again.
+
+### Why does ERPNext use port 8000 internally?
+Port 8000 is used internally for container communication. Changing it causes errors. The external port is configured via `APP_HTTP_PORT`.
+
+### How do I run a different ERPNext version?
+Change `APP_VERSION` in the `.env` file to v12, v13, or v14. Note: You must remove existing volumes before changing versions:
+```bash
+docker-compose down
+docker volume prune
+# Update .env
+docker-compose up -d
+```
 
 ## Documentation
 
-[ERPNext Administrator Guide](https://support.websoft9.com/docs/erpnext)
+[ERPNext Documentation](https://docs.erpnext.com/)
+[Frappe Framework Documentation](https://frappeframework.com/docs)
 
-## Enterprise Support
+## License
 
-If you want to get our Enterprise Support to ensure high availability of applications, you can subscribe our [ERPNext Enterprise Support](https://apps.websoft9.com/erpnext) 
-
-What you get with a Enterprise Support subscription?
-
-* Knowledge: Answers and guidance from product experts
-* Support: Everything you need for technical support, e.g Enable HTTPS, Upgrade guide
-* Security: Security services and tools to protect your software
+This Docker deployment configuration is open source. ERPNext is licensed under the GNU GPLv3 License.

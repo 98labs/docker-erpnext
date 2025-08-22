@@ -20,7 +20,7 @@ The application uses a microservices architecture with the following key service
 - **configurator**: One-time service that sets up common site configuration
 - **create-site**: One-time service that creates the initial ERPNext site
 
-All services connect through a Docker network specified by `APP_NETWORK` (default: websoft9).
+All services connect through a Docker network specified by `APP_NETWORK` (default: erpnext-local).
 
 ## Key Configuration Files
 
@@ -38,7 +38,7 @@ Critical variables in `.env`:
 - `APP_HTTP_PORT`: HTTP port for web access (default: 9001)
 - `DB_MARIA_PASSWORD`: MariaDB root password
 - `APP_NAME`: Container name prefix (default: erpnext)
-- `APP_NETWORK`: Docker network name (default: websoft9)
+- `APP_NETWORK`: Docker network name (default: erpnext-local)
 
 ## Common Development Commands
 
