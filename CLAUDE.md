@@ -114,6 +114,31 @@ When changing `APP_VERSION` in `.env`:
 - **Network**: All services communicate through the `erpnext-local` Docker network
 - **Default Credentials**: Administrator / LocalDev123!
 
+## API Development
+
+### Accessing APIs
+ERPNext provides REST APIs accessible at `http://localhost:8080/api/`
+
+### Common API Endpoints
+- **Login**: `POST /api/method/login`
+- **Resources**: `/api/resource/{DocType}`
+- **Methods**: `/api/method/{method_path}`
+
+### Testing APIs
+```bash
+# Login and get session
+curl -c cookies.txt -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"usr":"Administrator","pwd":"LocalDev123!"}' \
+  http://localhost:8080/api/method/login
+
+# Use session for API calls
+curl -b cookies.txt http://localhost:8080/api/resource/Item
+```
+
+### API Documentation
+See [API_GUIDE.md](API_GUIDE.md) for comprehensive API documentation.
+
 ## Troubleshooting
 
 ### Port Conflicts

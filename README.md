@@ -165,10 +165,21 @@ This deployment uses a microservices architecture with the following containers:
 - **configurator**: Initial configuration (runs once)
 - **create-site**: Site creation (runs once)
 
+## API Access
+
+ERPNext provides comprehensive REST APIs for integration. See [API_GUIDE.md](API_GUIDE.md) for detailed documentation on:
+- Authentication methods
+- REST API endpoints
+- WebSocket connections
+- API testing examples
+
+Quick access: `http://localhost:8080/api/`
+
 ## Documentation
 
 - [ERPNext Documentation](https://docs.erpnext.com/)
 - [Frappe Framework Documentation](https://frappeframework.com/docs)
+- [Frappe REST API Documentation](https://frappeframework.com/docs/user/en/api/rest)
 - [Docker Compose Documentation](https://docs.docker.com/compose/)
 
 ## Contributing
