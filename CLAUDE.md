@@ -116,28 +116,72 @@ When changing `APP_VERSION` in `.env`:
 
 ## API Development
 
-### Accessing APIs
-ERPNext provides REST APIs accessible at `http://localhost:8080/api/`
+### Complete API Ecosystem
+ERPNext provides comprehensive REST APIs with **771 documented DocTypes** across all modules.
 
-### Common API Endpoints
-- **Login**: `POST /api/method/login`
-- **Resources**: `/api/resource/{DocType}`
-- **Methods**: `/api/method/{method_path}`
+### API Documentation Files
+- **[API_ENDPOINTS.md](API_ENDPOINTS.md)** - Complete documentation of all 771 DocTypes
+- **[API_GUIDE.md](API_GUIDE.md)** - Comprehensive usage guide with examples
+- **[API_SECURITY.md](API_SECURITY.md)** - Security best practices and authentication methods
+- **[NODEJS_API_CLIENT.md](NODEJS_API_CLIENT.md)** - Node.js/Axios client documentation
 
-### Testing APIs
+### Secure API Clients
+Two production-ready API clients are available:
+
+#### Python Client (`secure_api_client.py`)
 ```bash
-# Login and get session
-curl -c cookies.txt -X POST \
-  -H "Content-Type: application/json" \
-  -d '{"usr":"Administrator","pwd":"LocalDev123!"}' \
-  http://localhost:8080/api/method/login
+# Test Python client
+python3 secure_api_client.py
 
-# Use session for API calls
-curl -b cookies.txt http://localhost:8080/api/resource/Item
+# Generate API documentation
+python3 generate_api_docs.py
 ```
 
-### API Documentation
-See [API_GUIDE.md](API_GUIDE.md) for comprehensive API documentation.
+#### Node.js/Axios Client (`secure_api_client.js`)
+```bash
+# Install dependencies
+npm install axios dotenv
+
+# Test Node.js client
+node secure_api_client.js
+
+# Run examples
+node examples/api_examples.js
+```
+
+### Authentication Methods (Security Ranked)
+1. **OAuth 2.0** (Best for third-party apps)
+2. **API Tokens** (Recommended for APIs) - `Authorization: token key:secret`
+3. **Session Cookies** (Web apps only, with CSRF protection)
+4. **Basic Auth** (Testing only, never production)
+
+### Quick API Testing
+```bash
+# Environment setup
+export ERPNEXT_API_KEY="your_key_here"
+export ERPNEXT_API_SECRET="your_secret_here"
+
+# Test with built-in scripts
+./test_api.sh                    # Basic cURL tests
+node test_env_vars.js           # Node.js environment test
+python3 secure_api_client.py    # Python secure client
+```
+
+### Common API Patterns
+- **List all**: `GET /api/resource/{DocType}`
+- **Get one**: `GET /api/resource/{DocType}/{name}`
+- **Create**: `POST /api/resource/{DocType}`
+- **Update**: `PUT /api/resource/{DocType}/{name}`
+- **Delete**: `DELETE /api/resource/{DocType}/{name}`
+
+### API Discovery Tools
+```bash
+# Generate/update complete API documentation
+python3 generate_api_docs.py
+
+# Discover endpoints
+./discover_api_endpoints.sh
+```
 
 ## Troubleshooting
 

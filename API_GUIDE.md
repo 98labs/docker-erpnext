@@ -210,6 +210,67 @@ items = session.get('http://localhost:8080/api/resource/Item')
 print(items.json())
 ```
 
+### Using Node.js/Axios (Recommended)
+
+#### Simple Usage
+```javascript
+const { ERPNextSecureClient } = require('./secure_api_client');
+
+async function example() {
+    const client = new ERPNextSecureClient('http://localhost:8080');
+    
+    // Authenticate with API token (uses environment variables)
+    await client.authenticateWithToken();
+    
+    // Get customers
+    const customers = await client.get('/api/resource/Customer');
+    console.log(customers.data);
+    
+    // Create new customer
+    const newCustomer = await client.post('/api/resource/Customer', {
+        customer_name: 'API Test Customer',
+        customer_type: 'Individual'
+    });
+    
+    await client.logout();
+}
+
+example().catch(console.error);
+```
+
+#### Advanced Usage with Caching and Retry
+```javascript
+const { ERPNextAdvancedSecureClient } = require('./secure_api_client');
+
+async function advancedExample() {
+    const client = new ERPNextAdvancedSecureClient('http://localhost:8080', {
+        enableCache: true,        // Response caching
+        retryAttempts: 3,        // Auto-retry failures  
+        rateLimitPerMinute: 60   // Rate limiting
+    });
+    
+    await client.authenticateWithToken();
+    
+    // First call hits API
+    const customers = await client.get('/api/resource/Customer');
+    
+    // Second call uses cache (faster)
+    const cachedCustomers = await client.get('/api/resource/Customer');
+    
+    await client.logout();
+}
+```
+
+#### Environment Variables Setup
+```bash
+# Create .env file
+echo 'ERPNEXT_API_KEY="your_key_here"' > .env
+echo 'ERPNEXT_API_SECRET="your_secret_here"' >> .env
+
+# Test environment variables
+node test_env_vars.js
+```
+
 ## Advanced Features
 
 ### 1. **Filters**

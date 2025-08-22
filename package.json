@@ -1,0 +1,35 @@
+{
+  "name": "erpnext-secure-api-client",
+  "version": "1.0.0",
+  "description": "Secure ERPNext API client with Axios for Node.js applications",
+  "main": "secure_api_client.js",
+  "scripts": {
+    "demo": "node secure_api_client.js",
+    "test-api": "node examples/api_examples.js",
+    "generate-docs": "python3 generate_api_docs.py"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "dotenv": "^16.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.0"
+  },
+  "keywords": [
+    "erpnext",
+    "api",
+    "client",
+    "security",
+    "axios",
+    "frappe"
+  ],
+  "author": "ERPNext API Security Team",
+  "license": "MIT",
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/98labs/docker-erpnext"
+  }
+}

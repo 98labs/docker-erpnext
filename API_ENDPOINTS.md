@@ -1,6 +1,6 @@
 # ERPNext API Endpoints Documentation
 
-Generated on: 2025-08-22 17:18:19
+Generated on: 2025-08-22 17:22:15
 
 This document provides a comprehensive list of all available API endpoints in ERPNext.
 
