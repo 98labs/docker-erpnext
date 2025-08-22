@@ -1,59 +1,106 @@
-# ERPNext
+# ERPNext Docker Deployment Notes
 
-## Install
+## Architecture Overview
 
-官方非常及时的更新了安装所需的镜像，且提供了灵活多变的 docker compose 文件以供用户使用。  
+ERPNext uses a microservices architecture with multiple containers working together:
+- Backend worker services (Frappe/ERPNext)
+- Frontend Nginx service
+- MariaDB database
+- Redis for caching and queues
+- WebSocket service for real-time features
+- Queue workers for background jobs
+- Scheduler for periodic tasks
 
-由于过于灵活，导致理解起来有些困难。 实际上 ERPNext 的安装比较简单：
+## Installation Process
 
-1. 将 example.env 另存为根目录 .env
-2. 将 compose.yaml 另存为根目录下 compose.yaml 或 docker-compose.yml，然后略加修改。接下来有两个可选方案：
-3. 方案一：使用 compose convert 命令合并多个 compose 为一个完整的 compose 文件（环境变量会替换），然后启动容器
-```
-docker compose -f compose.yaml -f src/overrides/compose.erpnext.yaml -f src/overrides/compose.redis.yaml -f src/overrides/compose.mariadb.yaml convert > docker-compose.yml
-```
-4. 方案二（推荐）：启动时引入主 compose 文件以及有选择性的启动 overrides 文件夹下的 docker compose 文件 (多 compose 文件的用法)
-```
-docker compose -f  docker-compose.yml -f src/overrides/compose.erpnext.yaml -f src/overrides/compose.redis.yaml -f src/overrides/compose.mariadb.yaml up -d
-```
+The installation is automated through Docker Compose:
 
-5. 主服务 backend 中创建一个 erpnext 项目（此步骤是必须的，但很容易被忽略）
-```
-APP_URL=8.218.129.87
-docker compose exec backend bench new-site youurl --mariadb-root-password yourpassword --admin-password admin123
+1. **Environment Configuration**: The `.env` file contains all necessary configuration variables
+2. **Network Setup**: Uses a dedicated Docker network (`erpnext-local`) for container communication
+3. **Service Orchestration**: The `docker-compose.yml` file orchestrates all services
+4. **Initial Setup**: The `configurator` and `create-site` services handle initial configuration
 
-or
+## Key Configuration Files
 
-```
-参考：https://github1s.com/frappe/frappe_docker/blob/HEAD/docs/site-operations.md
+### docker-compose.yml
+Main orchestration file that defines all services and their relationships.
 
-## FAQ
+### .env
+Environment variables including:
+- `POWER_PASSWORD`: Master password
+- `APP_VERSION`: ERPNext version (v12, v13, v14)
+- `APP_HTTP_PORT`: External HTTP port
+- `APP_NETWORK`: Docker network name
 
-#### 默认管理员账号密码？
+### src/compose.yaml
+Base Frappe compose configuration template.
 
-username: Administrator  
-password: admin
+### src/overrides/
+Contains specific override configurations for different components:
+- `compose.erpnext.yaml`: ERPNext-specific overrides
+- `compose.redis.yaml`: Redis configuration
+- `compose.mariadb.yaml`: MariaDB configuration
 
-#### ERPNext 镜像与 Frappe 镜像有什么区别？
+## Common Operations
 
-经过研究，ERPNext 是官方推出的新的镜像，感觉未来应该推荐使用它。
-
-实验中发现 ERPNext  不会出现图片乱码问题
-
-#### 究竟如何部署 ERPNext?
-
-从官方源码中发现，安装文档指南（单一服务器）中对安装写得过于繁琐，但实际上只需采用 overrides 中多个  compose 文件即可快速安装。  
-
-这是怎么回事呢？通过官方的论坛中研究，发现这是文档更新不及时导致，也就是说overrides中的安装在文档中还没有体现，虽然它更具有效率。  
-
-
-#### 与URL有关的变量有那些？
-
-```
-echo "ROUTER=custom-one-example" > ~/gitops/custom-one-example.env
-echo "SITES=\`custom-one.example.com\`" >> ~/gitops/custom-one-example.env
-echo "BASE_SITE=one.example.com" >> ~/gitops/custom-one-example.env
-echo "BENCH_NETWORK=erpnext-one" >> ~/gitops/custom-one-example.env
+### Creating a New Site (Manual)
+If you need to create additional sites:
+```bash
+docker compose exec backend bench new-site <site-name> --mariadb-root-password <password> --admin-password <admin-password>
 ```
 
-https://github.com/frappe/frappe_docker/blob/main/docs/single-server-example.md#create-custom-domain-to-existing-site
+### Backup and Restore
+```bash
+# Backup
+docker compose exec backend bench --site frontend backup
+
+# Restore
+docker compose exec backend bench --site frontend restore <backup-file>
+```
+
+## Version Differences
+
+### v12
+- Uses `mariadb` as database parameter
+- Older UI and features
+
+### v13+
+- Uses `db` as database parameter
+- Modern UI with improved features
+- Better performance
+
+## Troubleshooting
+
+### Image Issues
+If images appear broken, ensure the frontend service is running and properly configured.
+
+### Port 8000
+Internal port 8000 is hardcoded in ERPNext - do not change it. Use `APP_HTTP_PORT` for external access.
+
+### Site Creation
+The default site is named "frontend" and is created automatically by the `create-site` service.
+
+## Performance Tuning
+
+### Memory Requirements
+- Minimum: 4GB RAM
+- Recommended: 8GB+ RAM for production
+
+### Database Optimization
+MariaDB configuration can be tuned via environment variables or custom configuration files.
+
+### Redis Configuration
+Redis is used for caching and queue management. Default configuration is suitable for most deployments.
+
+## Security Considerations
+
+1. **Change Default Passwords**: Always change the default `POWER_PASSWORD` in production
+2. **Network Isolation**: The `erpnext-local` network provides isolation between containers
+3. **SSL/TLS**: Consider using a reverse proxy (nginx/traefik) for SSL termination in production
+4. **Firewall Rules**: Only expose necessary ports (typically just the HTTP port)
+
+## References
+
+- [ERPNext Documentation](https://docs.erpnext.com/)
+- [Frappe Framework](https://frappeframework.com/)
+- [Docker Compose Documentation](https://docs.docker.com/compose/)

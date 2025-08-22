@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Docker-based deployment of ERPNext, an open-source ERP system built on the Frappe framework. The repository provides a Cloud Native solution for simplified installation and management of ERPNext using Docker Compose.
+This is a Docker-based deployment of ERPNext, an open-source ERP system built on the Frappe framework. The repository provides a containerized solution for simplified installation and management of ERPNext using Docker Compose.
+
+**Repository**: https://github.com/98labs/docker-erpnext
 
 ## Architecture
 
@@ -33,17 +35,25 @@ All services connect through a Docker network specified by `APP_NETWORK` (defaul
 ## Environment Variables
 
 Critical variables in `.env`:
+- `POWER_PASSWORD`: Master password used by other services (default: LocalDev123!)
 - `APP_VERSION`: ERPNext version (v12, v13, v14)
-- `APP_PASSWORD`: Administrator password
-- `APP_HTTP_PORT`: HTTP port for web access (default: 9001)
-- `DB_MARIA_PASSWORD`: MariaDB root password
+- `APP_PASSWORD`: Administrator password (uses $POWER_PASSWORD)
+- `APP_HTTP_PORT`: HTTP port for web access (default: 8080)
+- `DB_MARIA_PASSWORD`: MariaDB root password (uses $POWER_PASSWORD)
 - `APP_NAME`: Container name prefix (default: erpnext)
 - `APP_NETWORK`: Docker network name (default: erpnext-local)
+- `APP_DB_PARAM`: Database parameter (v12 uses "mariadb", v13+ uses "db")
+- `APP_URL`: Application URL (default: localhost)
+- `APP_USER`: Administrator username (default: Administrator)
 
 ## Common Development Commands
 
-### Starting the Application
+### Initial Setup
 ```bash
+# Create the Docker network (first time only)
+docker network create erpnext-local
+
+# Start the application
 docker-compose up -d
 ```
 
@@ -68,7 +78,7 @@ docker exec -it erpnext-db mysql -u root -p
 
 ### Accessing the Backend Shell
 ```bash
-docker exec -it erpnext /bin/bash
+docker exec -it erpnext-backend /bin/bash
 ```
 
 ### Bench Commands (from within backend container)
@@ -95,8 +105,33 @@ When changing `APP_VERSION` in `.env`:
 
 ## Important Notes
 
-- Port 8000 is used internally despite appearing non-standard - changing it causes container communication errors
-- The default site name is "frontend" (created by create-site service)
-- Database parameter changes based on version: v12 uses "mariadb", v13+ uses "db"
-- All containers use restart policy "on-failure" for resilience
-- Site data is persisted in Docker volumes (sites, assets, db-data, redis-data)
+- **Internal Port**: Port 8000 is used internally for container communication - do not change this
+- **External Port**: The external HTTP port is configured via `APP_HTTP_PORT` in `.env` (default: 8080)
+- **Default Site**: The default site name is "frontend" (created by create-site service)
+- **Database Parameter**: Changes based on version - v12 uses "mariadb", v13+ uses "db"
+- **Restart Policy**: All containers use "on-failure" restart policy for resilience
+- **Data Persistence**: Site data is persisted in Docker volumes (sites, assets, db-data, redis-data)
+- **Network**: All services communicate through the `erpnext-local` Docker network
+- **Default Credentials**: Administrator / LocalDev123!
+
+## Troubleshooting
+
+### Port Conflicts
+If port 8080 is already in use, modify `APP_HTTP_PORT` in `.env` to a different port.
+
+### Network Issues
+Ensure the Docker network exists:
+```bash
+docker network ls | grep erpnext-local
+# If not found, create it:
+docker network create erpnext-local
+```
+
+### Version Changes
+When changing ERPNext versions, you must remove existing data:
+```bash
+docker-compose down
+docker volume prune  # WARNING: Removes all data
+# Update APP_VERSION in .env
+docker-compose up -d
+```

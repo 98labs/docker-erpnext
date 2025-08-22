@@ -2,7 +2,7 @@
 
 ## Introduction
 
-This repository provides a Docker-based deployment solution for ERPNext, simplifying the installation and initialization process.
+This repository provides a Docker-based deployment solution for [ERPNext](https://erpnext.com/), an open-source ERP system built on the [Frappe Framework](https://frappeframework.com/). It simplifies the installation and initialization process using Docker Compose.
 
 ## System Requirements
 
@@ -22,12 +22,15 @@ The following are the minimal [recommended requirements](https://github.com/frap
 
 ### Prerequisites
 
-If you have not installed Docker and Docker-Compose, refer to the following commands to install it:
+Ensure you have Docker and Docker Compose installed. If not, you can install them using:
 
 ```bash
+# Install Docker
 curl -fsSL https://get.docker.com -o get-docker.sh && sh get-docker.sh
 sudo systemctl enable docker
 sudo systemctl start docker
+
+# Setup docker-compose alias for Docker Compose V2
 alias docker-compose='docker compose'
 echo "alias docker-compose='docker compose'" >> /etc/profile.d/docker-compose.sh
 source /etc/profile.d/docker-compose.sh
@@ -48,9 +51,11 @@ docker network create erpnext-local
 
 3. Configure environment variables (optional):
 Edit the `.env` file to customize your deployment:
-- `APP_PASSWORD`: Administrator password (default: LocalDev123!)
-- `APP_HTTP_PORT`: HTTP port (default: 8080)
-- `APP_VERSION`: ERPNext version (v12, v13, or v14)
+- `POWER_PASSWORD`: Master password for all services (default: LocalDev123!)
+- `APP_HTTP_PORT`: HTTP port for web access (default: 8080)
+- `APP_VERSION`: ERPNext version - v12, v13, or v14 (default: v14)
+- `APP_NAME`: Container name prefix (default: erpnext)
+- `APP_NETWORK`: Docker network name (default: erpnext-local)
 
 4. Start the services:
 ```bash
@@ -59,7 +64,12 @@ docker-compose up -d
 
 ## Usage
 
-After deployment, you can access ERPNext at: `http://localhost:8080` (or your configured port)
+After deployment completes (may take a few minutes for initial setup), you can access ERPNext at: `http://localhost:8080` (or your configured port)
+
+**Note**: The initial setup creates the site and configures the database. Monitor progress with:
+```bash
+docker-compose logs -f create-site
+```
 
 ### Default Credentials
 
@@ -71,8 +81,10 @@ After deployment, you can access ERPNext at: `http://localhost:8080` (or your co
 
 | Service | Port | Use | Necessity |
 | ------- | ---- | --- | --------- |
-| ERPNext Web | 8080 | Browser access to ERPNext | Y |
-| MariaDB | 3306 | Database access | Y |
+| ERPNext Web | 8080 | Browser access to ERPNext | Required |
+| MariaDB | 3306 | Database access | Required |
+| Redis | 6379 | Cache and queue management | Required |
+| WebSocket | 9000 | Real-time communications | Required |
 
 ### Common Operations
 
@@ -103,6 +115,23 @@ bench --site frontend clear-cache
 bench --site frontend migrate
 ```
 
+## Troubleshooting
+
+### Container fails to start
+Check if the network exists:
+```bash
+docker network ls | grep erpnext-local
+```
+If not found, create it:
+```bash
+docker network create erpnext-local
+```
+
+### Cannot access the application
+- Verify all containers are running: `docker-compose ps`
+- Check logs for errors: `docker-compose logs`
+- Ensure port 8080 is not blocked by firewall
+
 ## FAQ
 
 ### Do I need to change the password before docker-compose up?
@@ -123,10 +152,35 @@ docker volume prune
 docker-compose up -d
 ```
 
+## Architecture
+
+This deployment uses a microservices architecture with the following containers:
+- **backend**: Main ERPNext/Frappe worker service
+- **frontend**: Nginx service for serving static assets
+- **db**: MariaDB 10.6 database
+- **redis**: Redis cache and queue management
+- **websocket**: Socket.io for real-time features
+- **queue-default/long/short**: Background job workers
+- **scheduler**: Scheduled tasks
+- **configurator**: Initial configuration (runs once)
+- **create-site**: Site creation (runs once)
+
 ## Documentation
 
-[ERPNext Documentation](https://docs.erpnext.com/)
-[Frappe Framework Documentation](https://frappeframework.com/docs)
+- [ERPNext Documentation](https://docs.erpnext.com/)
+- [Frappe Framework Documentation](https://frappeframework.com/docs)
+- [Docker Compose Documentation](https://docs.docker.com/compose/)
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## Support
+
+For issues related to:
+- **This Docker setup**: Open an issue in this repository
+- **ERPNext application**: Visit the [ERPNext Forum](https://discuss.erpnext.com/)
+- **Frappe Framework**: Visit the [Frappe GitHub](https://github.com/frappe/frappe)
 
 ## License
 
