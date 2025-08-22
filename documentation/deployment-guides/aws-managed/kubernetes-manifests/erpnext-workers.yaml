@@ -1,0 +1,542 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: erpnext-queue-default
+  namespace: erpnext
+  labels:
+    app: erpnext-queue-default
+    component: worker
+    queue: default
+    environment: production
+    version: v14
+  annotations:
+    deployment.kubernetes.io/revision: "1"
+    description: "ERPNext default queue worker"
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: erpnext-queue-default
+  template:
+    metadata:
+      labels:
+        app: erpnext-queue-default
+        component: worker
+        queue: default
+        environment: production
+        version: v14
+    spec:
+      serviceAccountName: erpnext-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: "OnRootMismatch"
+      initContainers:
+      - name: wait-for-backend
+        image: busybox:1.35
+        imagePullPolicy: IfNotPresent
+        command:
+        - sh
+        - -c
+        - |
+          echo 'Waiting for backend to be ready...'
+          until nc -z erpnext-backend 8000; do
+            echo 'Waiting for backend...'
+            sleep 10
+          done
+          echo 'Backend is ready!'
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi
+      containers:
+      - name: queue-worker
+        image: frappe/erpnext-worker:v14
+        imagePullPolicy: Always
+        command: ["bench", "worker", "--queue", "default"]
+        envFrom:
+        - configMapRef:
+            name: erpnext-config
+        env:
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-db-secret
+              key: password
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-redis-secret
+              key: password
+        - name: QUEUE_NAME
+          value: "default"
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        volumeMounts:
+        - name: sites-data
+          mountPath: /home/frappe/frappe-bench/sites
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+            ephemeral-storage: "1Gi"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+            ephemeral-storage: "2Gi"
+        livenessProbe:
+          exec:
+            command:
+            - pgrep
+            - -f
+            - "bench worker"
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          exec:
+            command:
+            - pgrep
+            - -f
+            - "bench worker"
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+      volumes:
+      - name: sites-data
+        persistentVolumeClaim:
+          claimName: erpnext-sites-pvc
+      nodeSelector:
+        node-type: worker
+      tolerations:
+      - key: "node.kubernetes.io/not-ready"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 300
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - erpnext-queue-default
+              topologyKey: kubernetes.io/hostname
+      terminationGracePeriodSeconds: 30
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: erpnext-queue-long
+  namespace: erpnext
+  labels:
+    app: erpnext-queue-long
+    component: worker
+    queue: long
+    environment: production
+    version: v14
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: erpnext-queue-long
+  template:
+    metadata:
+      labels:
+        app: erpnext-queue-long
+        component: worker
+        queue: long
+        environment: production
+        version: v14
+    spec:
+      serviceAccountName: erpnext-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: "OnRootMismatch"
+      initContainers:
+      - name: wait-for-backend
+        image: busybox:1.35
+        imagePullPolicy: IfNotPresent
+        command:
+        - sh
+        - -c
+        - |
+          echo 'Waiting for backend to be ready...'
+          until nc -z erpnext-backend 8000; do
+            echo 'Waiting for backend...'
+            sleep 10
+          done
+          echo 'Backend is ready!'
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi
+      containers:
+      - name: queue-worker
+        image: frappe/erpnext-worker:v14
+        imagePullPolicy: Always
+        command: ["bench", "worker", "--queue", "long"]
+        envFrom:
+        - configMapRef:
+            name: erpnext-config
+        env:
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-db-secret
+              key: password
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-redis-secret
+              key: password
+        - name: QUEUE_NAME
+          value: "long"
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        volumeMounts:
+        - name: sites-data
+          mountPath: /home/frappe/frappe-bench/sites
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+            ephemeral-storage: "1Gi"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+            ephemeral-storage: "2Gi"
+        livenessProbe:
+          exec:
+            command:
+            - pgrep
+            - -f
+            - "bench worker"
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          exec:
+            command:
+            - pgrep
+            - -f
+            - "bench worker"
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+      volumes:
+      - name: sites-data
+        persistentVolumeClaim:
+          claimName: erpnext-sites-pvc
+      nodeSelector:
+        node-type: worker
+      tolerations:
+      - key: "node.kubernetes.io/not-ready"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 300
+      terminationGracePeriodSeconds: 60
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: erpnext-queue-short
+  namespace: erpnext
+  labels:
+    app: erpnext-queue-short
+    component: worker
+    queue: short
+    environment: production
+    version: v14
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: erpnext-queue-short
+  template:
+    metadata:
+      labels:
+        app: erpnext-queue-short
+        component: worker
+        queue: short
+        environment: production
+        version: v14
+    spec:
+      serviceAccountName: erpnext-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: "OnRootMismatch"
+      initContainers:
+      - name: wait-for-backend
+        image: busybox:1.35
+        imagePullPolicy: IfNotPresent
+        command:
+        - sh
+        - -c
+        - |
+          echo 'Waiting for backend to be ready...'
+          until nc -z erpnext-backend 8000; do
+            echo 'Waiting for backend...'
+            sleep 10
+          done
+          echo 'Backend is ready!'
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi
+      containers:
+      - name: queue-worker
+        image: frappe/erpnext-worker:v14
+        imagePullPolicy: Always
+        command: ["bench", "worker", "--queue", "short"]
+        envFrom:
+        - configMapRef:
+            name: erpnext-config
+        env:
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-db-secret
+              key: password
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-redis-secret
+              key: password
+        - name: QUEUE_NAME
+          value: "short"
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        volumeMounts:
+        - name: sites-data
+          mountPath: /home/frappe/frappe-bench/sites
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+            ephemeral-storage: "500Mi"
+          limits:
+            memory: "512Mi"
+            cpu: "250m"
+            ephemeral-storage: "1Gi"
+        livenessProbe:
+          exec:
+            command:
+            - pgrep
+            - -f
+            - "bench worker"
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          exec:
+            command:
+            - pgrep
+            - -f
+            - "bench worker"
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+      volumes:
+      - name: sites-data
+        persistentVolumeClaim:
+          claimName: erpnext-sites-pvc
+      nodeSelector:
+        node-type: worker
+      tolerations:
+      - key: "node.kubernetes.io/not-ready"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 300
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - erpnext-queue-short
+              topologyKey: kubernetes.io/hostname
+      terminationGracePeriodSeconds: 30
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: erpnext-scheduler
+  namespace: erpnext
+  labels:
+    app: erpnext-scheduler
+    component: scheduler
+    environment: production
+    version: v14
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate  # Only one scheduler should run at a time
+  selector:
+    matchLabels:
+      app: erpnext-scheduler
+  template:
+    metadata:
+      labels:
+        app: erpnext-scheduler
+        component: scheduler
+        environment: production
+        version: v14
+    spec:
+      serviceAccountName: erpnext-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: "OnRootMismatch"
+      initContainers:
+      - name: wait-for-backend
+        image: busybox:1.35
+        imagePullPolicy: IfNotPresent
+        command:
+        - sh
+        - -c
+        - |
+          echo 'Waiting for backend to be ready...'
+          until nc -z erpnext-backend 8000; do
+            echo 'Waiting for backend...'
+            sleep 10
+          done
+          echo 'Backend is ready!'
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi
+      containers:
+      - name: scheduler
+        image: frappe/erpnext-worker:v14
+        imagePullPolicy: Always
+        command: ["bench", "schedule"]
+        envFrom:
+        - configMapRef:
+            name: erpnext-config
+        env:
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-db-secret
+              key: password
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-redis-secret
+              key: password
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        volumeMounts:
+        - name: sites-data
+          mountPath: /home/frappe/frappe-bench/sites
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+            ephemeral-storage: "500Mi"
+          limits:
+            memory: "512Mi"
+            cpu: "250m"
+            ephemeral-storage: "1Gi"
+        livenessProbe:
+          exec:
+            command:
+            - pgrep
+            - -f
+            - "bench schedule"
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          exec:
+            command:
+            - pgrep
+            - -f
+            - "bench schedule"
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+      volumes:
+      - name: sites-data
+        persistentVolumeClaim:
+          claimName: erpnext-sites-pvc
+      nodeSelector:
+        node-type: worker
+        kubernetes.io/arch: amd64
+      tolerations:
+      - key: "node.kubernetes.io/not-ready"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 300
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+              - key: node-type
+                operator: In
+                values:
+                - worker
+      terminationGracePeriodSeconds: 30

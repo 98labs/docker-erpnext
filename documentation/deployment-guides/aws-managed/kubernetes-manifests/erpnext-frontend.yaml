@@ -1,0 +1,247 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: erpnext-frontend
+  namespace: erpnext
+  labels:
+    app: erpnext-frontend
+    component: frontend
+    environment: production
+    version: v14
+  annotations:
+    deployment.kubernetes.io/revision: "1"
+    description: "ERPNext Nginx frontend web server"
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: erpnext-frontend
+  template:
+    metadata:
+      labels:
+        app: erpnext-frontend
+        component: frontend
+        environment: production
+        version: v14
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/nginx_status"
+    spec:
+      serviceAccountName: erpnext-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101  # nginx user
+        runAsGroup: 101
+        fsGroup: 1000
+        fsGroupChangePolicy: "OnRootMismatch"
+      initContainers:
+      - name: wait-for-backend
+        image: busybox:1.35
+        imagePullPolicy: IfNotPresent
+        command:
+        - sh
+        - -c
+        - |
+          echo 'Waiting for backend to be ready...'
+          until nc -z erpnext-backend 8000; do
+            echo 'Waiting for backend...'
+            sleep 5
+          done
+          echo 'Backend is ready!'
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi
+      containers:
+      - name: erpnext-frontend
+        image: frappe/erpnext-nginx:v14
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        volumeMounts:
+        - name: sites-data
+          mountPath: /home/frappe/frappe-bench/sites
+          readOnly: true
+        - name: nginx-config
+          mountPath: /etc/nginx/nginx.conf
+          subPath: nginx.conf
+          readOnly: true
+        - name: nginx-cache
+          mountPath: /var/cache/nginx
+        - name: nginx-run
+          mountPath: /var/run
+        - name: tmp-volume
+          mountPath: /tmp
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+            ephemeral-storage: "500Mi"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+            ephemeral-storage: "1Gi"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+          successThreshold: 1
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+          successThreshold: 1
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 12
+          successThreshold: 1
+        lifecycle:
+          preStop:
+            exec:
+              command:
+              - /bin/sh
+              - -c
+              - sleep 15
+      volumes:
+      - name: sites-data
+        persistentVolumeClaim:
+          claimName: erpnext-sites-pvc
+      - name: nginx-config
+        configMap:
+          name: erpnext-nginx-config
+          items:
+          - key: nginx.conf
+            path: nginx.conf
+      - name: nginx-cache
+        emptyDir:
+          sizeLimit: 500Mi
+      - name: nginx-run
+        emptyDir:
+          sizeLimit: 100Mi
+      - name: tmp-volume
+        emptyDir:
+          sizeLimit: 500Mi
+      nodeSelector:
+        node-type: worker
+        kubernetes.io/arch: amd64
+      tolerations:
+      - key: "node.kubernetes.io/not-ready"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 300
+      - key: "node.kubernetes.io/unreachable"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 300
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - erpnext-frontend
+              topologyKey: kubernetes.io/hostname
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+              - key: node-type
+                operator: In
+                values:
+                - worker
+      terminationGracePeriodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: erpnext-frontend
+  namespace: erpnext
+  labels:
+    app: erpnext-frontend
+    component: frontend
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    service.beta.kubernetes.io/aws-load-balancer-backend-protocol: "http"
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8080"
+    prometheus.io/path: "/nginx_status"
+spec:
+  selector:
+    app: erpnext-frontend
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+    protocol: TCP
+  type: ClusterIP
+  sessionAffinity: None
+---
+# ServiceMonitor for Prometheus monitoring
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: erpnext-frontend
+  namespace: erpnext
+  labels:
+    app: erpnext-frontend
+    component: frontend
+    monitoring: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: erpnext-frontend
+  endpoints:
+  - port: http
+    path: /nginx_status
+    interval: 30s
+    scrapeTimeout: 10s
+    honorLabels: true

@@ -1,0 +1,328 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: erpnext-backend
+  namespace: erpnext
+  labels:
+    app: erpnext-backend
+    component: backend
+    environment: production
+    version: v14
+  annotations:
+    deployment.kubernetes.io/revision: "1"
+    description: "ERPNext backend application server"
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: erpnext-backend
+  template:
+    metadata:
+      labels:
+        app: erpnext-backend
+        component: backend
+        environment: production
+        version: v14
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: erpnext-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: "OnRootMismatch"
+      initContainers:
+      - name: wait-for-db
+        image: busybox:1.35
+        imagePullPolicy: IfNotPresent
+        command:
+        - sh
+        - -c
+        - |
+          echo 'Waiting for database to be ready...'
+          until nc -z $DB_HOST $DB_PORT; do
+            echo 'Waiting for database...'
+            sleep 10
+          done
+          echo 'Database is ready!'
+          
+          echo 'Waiting for Redis to be ready...'
+          until nc -z $(echo $REDIS_CACHE_URL | cut -d'/' -f3 | cut -d':' -f1) 6379; do
+            echo 'Waiting for Redis...'
+            sleep 10
+          done
+          echo 'Redis is ready!'
+        envFrom:
+        - configMapRef:
+            name: erpnext-config
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi
+      containers:
+      - name: erpnext-backend
+        image: frappe/erpnext-worker:v14
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+          name: http
+          protocol: TCP
+        - containerPort: 9000
+          name: socketio
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: erpnext-config
+        env:
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-db-secret
+              key: password
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-redis-secret
+              key: password
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        volumeMounts:
+        - name: sites-data
+          mountPath: /home/frappe/frappe-bench/sites
+        - name: backups-data
+          mountPath: /home/frappe/frappe-bench/sites/backups
+        - name: logs-data
+          mountPath: /home/frappe/frappe-bench/logs
+        - name: tmp-volume
+          mountPath: /tmp
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+            ephemeral-storage: "1Gi"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+            ephemeral-storage: "2Gi"
+        livenessProbe:
+          httpGet:
+            path: /api/method/ping
+            port: 8000
+            scheme: HTTP
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+          successThreshold: 1
+        readinessProbe:
+          httpGet:
+            path: /api/method/ping
+            port: 8000
+            scheme: HTTP
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+          successThreshold: 1
+        startupProbe:
+          httpGet:
+            path: /api/method/ping
+            port: 8000
+            scheme: HTTP
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 30
+          successThreshold: 1
+        lifecycle:
+          preStop:
+            exec:
+              command:
+              - /bin/sh
+              - -c
+              - sleep 10
+      # Sidecar container for log collection
+      - name: fluent-bit
+        image: fluent/fluent-bit:2.2.0
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 2020
+          name: metrics
+          protocol: TCP
+        env:
+        - name: AWS_REGION
+          value: "us-east-1"
+        - name: CLUSTER_NAME
+          value: "erpnext-cluster"
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        volumeMounts:
+        - name: fluent-bit-config
+          mountPath: /fluent-bit/etc
+        - name: logs-data
+          mountPath: /home/frappe/frappe-bench/logs
+          readOnly: true
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi
+      volumes:
+      - name: sites-data
+        persistentVolumeClaim:
+          claimName: erpnext-sites-pvc
+      - name: backups-data
+        persistentVolumeClaim:
+          claimName: erpnext-backups-pvc
+      - name: logs-data
+        persistentVolumeClaim:
+          claimName: erpnext-logs-pvc
+      - name: fluent-bit-config
+        configMap:
+          name: fluent-bit-config
+      - name: tmp-volume
+        emptyDir:
+          sizeLimit: 1Gi
+      nodeSelector:
+        node-type: worker
+        kubernetes.io/arch: amd64
+      tolerations:
+      - key: "node.kubernetes.io/not-ready"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 300
+      - key: "node.kubernetes.io/unreachable"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 300
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - erpnext-backend
+              topologyKey: kubernetes.io/hostname
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+              - key: node-type
+                operator: In
+                values:
+                - worker
+      terminationGracePeriodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: erpnext-backend
+  namespace: erpnext
+  labels:
+    app: erpnext-backend
+    component: backend
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    service.beta.kubernetes.io/aws-load-balancer-backend-protocol: "http"
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8000"
+    prometheus.io/path: "/metrics"
+spec:
+  selector:
+    app: erpnext-backend
+  ports:
+  - name: http
+    port: 8000
+    targetPort: 8000
+    protocol: TCP
+  - name: socketio
+    port: 9000
+    targetPort: 9000
+    protocol: TCP
+  type: ClusterIP
+  sessionAffinity: None
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: erpnext-backend-headless
+  namespace: erpnext
+  labels:
+    app: erpnext-backend
+    component: backend
+    service-type: headless
+spec:
+  selector:
+    app: erpnext-backend
+  ports:
+  - name: http
+    port: 8000
+    targetPort: 8000
+    protocol: TCP
+  - name: socketio
+    port: 9000
+    targetPort: 9000
+    protocol: TCP
+  type: ClusterIP
+  clusterIP: None
+---
+# ServiceMonitor for Prometheus monitoring
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: erpnext-backend
+  namespace: erpnext
+  labels:
+    app: erpnext-backend
+    component: backend
+    monitoring: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: erpnext-backend
+  endpoints:
+  - port: http
+    path: /metrics
+    interval: 30s
+    scrapeTimeout: 10s
+    honorLabels: true
+  - port: socketio
+    path: /metrics
+    interval: 30s
+    scrapeTimeout: 10s
+    honorLabels: true

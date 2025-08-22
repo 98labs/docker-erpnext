@@ -1,0 +1,274 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: erpnext-ingress
+  namespace: erpnext
+  labels:
+    app: erpnext
+    component: ingress
+    environment: production
+  annotations:
+    # AWS Load Balancer Controller annotations
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/backend-protocol: HTTP
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    
+    # SSL/TLS Configuration
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-east-1:${ACCOUNT_ID}:certificate/${CERT_ID}
+    alb.ingress.kubernetes.io/ssl-policy: ELBSecurityPolicy-TLS-1-2-2017-01
+    
+    # Load Balancer Attributes
+    alb.ingress.kubernetes.io/load-balancer-attributes: |
+      routing.http2.enabled=true,
+      idle_timeout.timeout_seconds=60,
+      access_logs.s3.enabled=true,
+      access_logs.s3.bucket=erpnext-alb-logs-${ACCOUNT_ID},
+      access_logs.s3.prefix=erpnext-alb
+    
+    # Health Check Configuration
+    alb.ingress.kubernetes.io/healthcheck-grace-period-seconds: "60"
+    alb.ingress.kubernetes.io/healthcheck-interval-seconds: "15"
+    alb.ingress.kubernetes.io/healthcheck-timeout-seconds: "5"
+    alb.ingress.kubernetes.io/healthy-threshold-count: "2"
+    alb.ingress.kubernetes.io/unhealthy-threshold-count: "3"
+    alb.ingress.kubernetes.io/success-codes: "200,201,202"
+    
+    # Security and Performance
+    alb.ingress.kubernetes.io/security-groups: sg-${SECURITY_GROUP_ID}
+    alb.ingress.kubernetes.io/subnets: subnet-${PUBLIC_SUBNET_1A},subnet-${PUBLIC_SUBNET_1B}
+    alb.ingress.kubernetes.io/wafv2-acl-arn: arn:aws:wafv2:us-east-1:${ACCOUNT_ID}:regional/webacl/ERPNextWAF/${WAF_ID}
+    
+    # Tags for Cost Allocation
+    alb.ingress.kubernetes.io/tags: |
+      Environment=production,
+      Application=ERPNext,
+      Team=Infrastructure,
+      CostCenter=IT,
+      Project=ERP
+    
+    # Additional annotations for performance
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+    nginx.ingress.kubernetes.io/client-body-buffer-size: "1m"
+    nginx.ingress.kubernetes.io/proxy-buffering: "on"
+    nginx.ingress.kubernetes.io/proxy-buffer-size: "8k"
+    nginx.ingress.kubernetes.io/proxy-buffers: "8 8k"
+    
+    # Security headers
+    nginx.ingress.kubernetes.io/server-snippet: |
+      add_header X-Frame-Options DENY;
+      add_header X-Content-Type-Options nosniff;
+      add_header X-XSS-Protection "1; mode=block";
+      add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload";
+      add_header Referrer-Policy "strict-origin-when-cross-origin";
+      add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' wss:";
+spec:
+  tls:
+  - hosts:
+    - erpnext.yourdomain.com
+    - www.erpnext.yourdomain.com
+    secretName: erpnext-ssl-certs
+  rules:
+  - host: erpnext.yourdomain.com
+    http:
+      paths:
+      # Socket.IO traffic - highest priority
+      - path: /socket.io
+        pathType: Prefix
+        backend:
+          service:
+            name: erpnext-backend
+            port:
+              number: 9000
+      
+      # API endpoints
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: erpnext-backend
+            port:
+              number: 8000
+      
+      # File downloads and uploads
+      - path: /files
+        pathType: Prefix
+        backend:
+          service:
+            name: erpnext-frontend
+            port:
+              number: 8080
+      
+      # Static assets
+      - path: /assets
+        pathType: Prefix
+        backend:
+          service:
+            name: erpnext-frontend
+            port:
+              number: 8080
+      
+      # Health check endpoint
+      - path: /health
+        pathType: Exact
+        backend:
+          service:
+            name: erpnext-frontend
+            port:
+              number: 8080
+      
+      # All other traffic to frontend
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: erpnext-frontend
+            port:
+              number: 8080
+  
+  # Redirect www to non-www
+  - host: www.erpnext.yourdomain.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: erpnext-frontend
+            port:
+              number: 8080
+---
+# Additional ingress for internal monitoring (optional)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: erpnext-monitoring-ingress
+  namespace: erpnext
+  labels:
+    app: erpnext
+    component: monitoring
+    environment: production
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internal
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/backend-protocol: HTTP
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}]'
+    alb.ingress.kubernetes.io/subnets: subnet-${PRIVATE_SUBNET_1A},subnet-${PRIVATE_SUBNET_1B}
+    alb.ingress.kubernetes.io/security-groups: sg-${MONITORING_SECURITY_GROUP_ID}
+    alb.ingress.kubernetes.io/tags: |
+      Environment=production,
+      Application=ERPNext,
+      Component=Monitoring,
+      Access=Internal
+spec:
+  rules:
+  - host: erpnext-monitoring.internal
+    http:
+      paths:
+      # Prometheus metrics
+      - path: /metrics
+        pathType: Prefix
+        backend:
+          service:
+            name: erpnext-backend
+            port:
+              number: 8000
+      
+      # Health checks
+      - path: /health
+        pathType: Prefix
+        backend:
+          service:
+            name: erpnext-frontend
+            port:
+              number: 8080
+---
+# Network Policy to restrict ingress traffic
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: erpnext-ingress-policy
+  namespace: erpnext
+  labels:
+    app: erpnext
+    component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: erpnext-frontend
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: aws-load-balancer-controller
+    ports:
+    - protocol: TCP
+      port: 8080
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: erpnext
+    - podSelector:
+        matchLabels:
+          component: backend
+    ports:
+    - protocol: TCP
+      port: 8080
+---
+# HorizontalPodAutoscaler for frontend based on ALB metrics
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: erpnext-frontend-hpa
+  namespace: erpnext
+  labels:
+    app: erpnext-frontend
+    component: autoscaling
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: erpnext-frontend
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 50
+        periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 60
+      - type: Pods
+        value: 2
+        periodSeconds: 60
+      selectPolicy: Max

@@ -1,0 +1,436 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: erpnext-create-site
+  namespace: erpnext
+  labels:
+    app: erpnext
+    component: setup
+    job-type: create-site
+  annotations:
+    description: "Initialize ERPNext site with database and default configuration"
+spec:
+  backoffLimit: 3
+  completions: 1
+  parallelism: 1
+  activeDeadlineSeconds: 3600  # 1 hour timeout
+  template:
+    metadata:
+      labels:
+        app: erpnext
+        component: setup
+        job-type: create-site
+    spec:
+      serviceAccountName: erpnext-sa
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: "OnRootMismatch"
+      initContainers:
+      - name: wait-for-services
+        image: busybox:1.35
+        imagePullPolicy: IfNotPresent
+        command:
+        - sh
+        - -c
+        - |
+          echo 'Waiting for database to be ready...'
+          until nc -z $DB_HOST $DB_PORT; do
+            echo 'Waiting for database...'
+            sleep 10
+          done
+          echo 'Database is ready!'
+          
+          echo 'Waiting for Redis to be ready...'
+          REDIS_HOST=$(echo $REDIS_CACHE_URL | cut -d'/' -f3 | cut -d':' -f1)
+          until nc -z $REDIS_HOST 6379; do
+            echo 'Waiting for Redis...'
+            sleep 10
+          done
+          echo 'Redis is ready!'
+          
+          # Additional wait for services to stabilize
+          echo 'Waiting for services to stabilize...'
+          sleep 30
+          echo 'Services are ready!'
+        envFrom:
+        - configMapRef:
+            name: erpnext-config
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi
+      containers:
+      - name: create-site
+        image: frappe/erpnext-worker:v14
+        imagePullPolicy: Always
+        command:
+        - bash
+        - -c
+        - |
+          set -e
+          echo "Starting ERPNext site creation process..."
+          
+          # Check if site already exists
+          if [ -d "/home/frappe/frappe-bench/sites/frontend" ]; then
+            echo "Site 'frontend' already exists. Checking if it's properly configured..."
+            
+            # Verify site configuration
+            if bench --site frontend list-apps | grep -q erpnext; then
+              echo "Site is properly configured with ERPNext. Skipping creation."
+              exit 0
+            else
+              echo "Site exists but ERPNext is not installed. Installing ERPNext..."
+              bench --site frontend install-app erpnext
+              echo "ERPNext installation completed."
+              exit 0
+            fi
+          fi
+          
+          echo "Creating new ERPNext site 'frontend'..."
+          
+          # Set database connection parameters
+          export DB_HOST="$DB_HOST"
+          export DB_PORT="$DB_PORT"
+          export DB_NAME="$DB_NAME"
+          export DB_USER="$DB_USER"
+          
+          # Create the site with ERPNext
+          bench new-site frontend \
+            --admin-password "$ADMIN_PASSWORD" \
+            --mariadb-root-password "$DB_PASSWORD" \
+            --install-app erpnext \
+            --set-default \
+            --verbose
+          
+          # Configure site for production
+          echo "Configuring site for production..."
+          
+          # Set maintenance mode off
+          bench --site frontend set-maintenance-mode off
+          
+          # Clear cache
+          bench --site frontend clear-cache
+          
+          # Set up site configuration
+          bench --site frontend set-config developer_mode 0
+          bench --site frontend set-config maintenance_mode 0
+          bench --site frontend set-config enable_scheduler 1
+          
+          # Create a backup
+          echo "Creating initial backup..."
+          bench --site frontend backup --with-files
+          
+          echo "Site creation and configuration completed successfully!"
+          echo "Site URL: $APP_URL"
+          echo "Admin User: $APP_USER"
+          echo "Site is ready for use."
+        envFrom:
+        - configMapRef:
+            name: erpnext-config
+        env:
+        - name: ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-admin-secret
+              key: password
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-db-secret
+              key: password
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-redis-secret
+              key: password
+        volumeMounts:
+        - name: sites-data
+          mountPath: /home/frappe/frappe-bench/sites
+        - name: backups-data
+          mountPath: /home/frappe/frappe-bench/sites/backups
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+            ephemeral-storage: "2Gi"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+            ephemeral-storage: "4Gi"
+      volumes:
+      - name: sites-data
+        persistentVolumeClaim:
+          claimName: erpnext-sites-pvc
+      - name: backups-data
+        persistentVolumeClaim:
+          claimName: erpnext-backups-pvc
+      nodeSelector:
+        node-type: worker
+        kubernetes.io/arch: amd64
+      tolerations:
+      - key: "node.kubernetes.io/not-ready"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 300
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: erpnext-backup
+  namespace: erpnext
+  labels:
+    app: erpnext
+    component: backup
+    schedule-type: daily
+  annotations:
+    description: "Daily backup of ERPNext database and files to S3"
+spec:
+  schedule: "0 2 * * *"  # Daily at 2 AM UTC
+  timeZone: "UTC"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  startingDeadlineSeconds: 300
+  jobTemplate:
+    metadata:
+      labels:
+        app: erpnext
+        component: backup
+        schedule-type: daily
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 7200  # 2 hours timeout
+      template:
+        metadata:
+          labels:
+            app: erpnext
+            component: backup
+            schedule-type: daily
+        spec:
+          serviceAccountName: erpnext-sa
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            fsGroup: 1000
+            fsGroupChangePolicy: "OnRootMismatch"
+          containers:
+          - name: backup
+            image: frappe/erpnext-worker:v14
+            imagePullPolicy: Always
+            command:
+            - bash
+            - -c
+            - |
+              set -e
+              
+              BACKUP_DATE=$(date +%Y%m%d_%H%M%S)
+              BACKUP_DIR="/home/frappe/frappe-bench/sites/backups"
+              S3_BUCKET="${AWS_S3_BUCKET:-erpnext-backups-${ACCOUNT_ID}}"
+              
+              echo "Starting backup process at $BACKUP_DATE"
+              
+              # Ensure backup directory exists
+              mkdir -p "$BACKUP_DIR"
+              
+              # Create database backup with files
+              echo "Creating database backup..."
+              bench --site frontend backup --with-files --backup-path "$BACKUP_DIR"
+              
+              # List created backup files
+              echo "Backup files created:"
+              ls -la "$BACKUP_DIR"
+              
+              # Upload to S3 if configured
+              if [ -n "$S3_BUCKET" ] && command -v aws >/dev/null 2>&1; then
+                echo "Uploading backups to S3 bucket: $S3_BUCKET"
+                
+                # Create S3 path with date
+                S3_PATH="s3://$S3_BUCKET/backups/$BACKUP_DATE/"
+                
+                # Upload all backup files
+                aws s3 cp "$BACKUP_DIR/" "$S3_PATH" --recursive --exclude "*" --include "*.sql.gz" --include "*.tar"
+                
+                if [ $? -eq 0 ]; then
+                  echo "Backup successfully uploaded to $S3_PATH"
+                  
+                  # Clean up local backup files older than 7 days
+                  find "$BACKUP_DIR" -name "*.sql.gz" -mtime +7 -delete
+                  find "$BACKUP_DIR" -name "*.tar" -mtime +7 -delete
+                  echo "Cleaned up local backup files older than 7 days"
+                else
+                  echo "Failed to upload backup to S3"
+                  exit 1
+                fi
+              else
+                echo "S3 upload not configured or AWS CLI not available"
+                echo "Keeping backups locally"
+              fi
+              
+              # Generate backup report
+              echo "Backup Summary:"
+              echo "- Backup Date: $BACKUP_DATE"
+              echo "- Backup Location: $BACKUP_DIR"
+              if [ -n "$S3_BUCKET" ]; then
+                echo "- S3 Location: $S3_PATH"
+              fi
+              echo "- Backup Status: SUCCESS"
+              
+              echo "Backup process completed successfully"
+            envFrom:
+            - configMapRef:
+                name: erpnext-config
+            env:
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: erpnext-db-secret
+                  key: password
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: erpnext-redis-secret
+                  key: password
+            - name: ACCOUNT_ID
+              value: "${ACCOUNT_ID}"
+            volumeMounts:
+            - name: sites-data
+              mountPath: /home/frappe/frappe-bench/sites
+            - name: backups-data
+              mountPath: /home/frappe/frappe-bench/sites/backups
+            resources:
+              requests:
+                memory: "512Mi"
+                cpu: "250m"
+                ephemeral-storage: "2Gi"
+              limits:
+                memory: "1Gi"
+                cpu: "500m"
+                ephemeral-storage: "4Gi"
+          volumes:
+          - name: sites-data
+            persistentVolumeClaim:
+              claimName: erpnext-sites-pvc
+          - name: backups-data
+            persistentVolumeClaim:
+              claimName: erpnext-backups-pvc
+          nodeSelector:
+            node-type: worker
+            kubernetes.io/arch: amd64
+          tolerations:
+          - key: "node.kubernetes.io/not-ready"
+            operator: "Exists"
+            effect: "NoExecute"
+            tolerationSeconds: 300
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: erpnext-maintenance
+  namespace: erpnext
+  labels:
+    app: erpnext
+    component: maintenance
+    schedule-type: weekly
+  annotations:
+    description: "Weekly maintenance tasks for ERPNext"
+spec:
+  schedule: "0 3 * * 0"  # Weekly on Sunday at 3 AM UTC
+  timeZone: "UTC"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  startingDeadlineSeconds: 600
+  jobTemplate:
+    metadata:
+      labels:
+        app: erpnext
+        component: maintenance
+        schedule-type: weekly
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 3600  # 1 hour timeout
+      template:
+        metadata:
+          labels:
+            app: erpnext
+            component: maintenance
+            schedule-type: weekly
+        spec:
+          serviceAccountName: erpnext-sa
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            fsGroup: 1000
+          containers:
+          - name: maintenance
+            image: frappe/erpnext-worker:v14
+            imagePullPolicy: Always
+            command:
+            - bash
+            - -c
+            - |
+              set -e
+              
+              echo "Starting weekly maintenance tasks..."
+              
+              # Clear cache and optimize
+              echo "Clearing cache..."
+              bench --site frontend clear-cache
+              
+              # Run database optimization
+              echo "Running database maintenance..."
+              bench --site frontend execute "frappe.utils.bench_manager.run_patches()"
+              
+              # Clean up logs
+              echo "Cleaning up old logs..."
+              find /home/frappe/frappe-bench/logs -name "*.log" -mtime +30 -delete
+              
+              # Generate system health report
+              echo "Generating system health report..."
+              bench --site frontend execute "frappe.utils.doctor.get_system_info()"
+              
+              echo "Weekly maintenance completed successfully"
+            envFrom:
+            - configMapRef:
+                name: erpnext-config
+            env:
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: erpnext-db-secret
+                  key: password
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: erpnext-redis-secret
+                  key: password
+            volumeMounts:
+            - name: sites-data
+              mountPath: /home/frappe/frappe-bench/sites
+            resources:
+              requests:
+                memory: "256Mi"
+                cpu: "100m"
+                ephemeral-storage: "1Gi"
+              limits:
+                memory: "512Mi"
+                cpu: "250m"
+                ephemeral-storage: "2Gi"
+          volumes:
+          - name: sites-data
+            persistentVolumeClaim:
+              claimName: erpnext-sites-pvc
+          nodeSelector:
+            node-type: worker
+            kubernetes.io/arch: amd64

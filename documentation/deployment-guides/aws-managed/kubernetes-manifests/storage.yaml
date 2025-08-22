@@ -1,0 +1,101 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: efs-sc
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "false"
+provisioner: efs.csi.aws.com
+parameters:
+  provisioningMode: efs-ap
+  fileSystemId: ${EFS_ID}  # Replace with actual EFS ID
+  directoryPerms: "700"
+  gidRangeStart: "1000"
+  gidRangeEnd: "2000"
+  basePath: "/dynamic_provisioning"
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ebs-gp3
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+provisioner: ebs.csi.aws.com
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+parameters:
+  type: gp3
+  iops: "3000"
+  throughput: "125"
+  encrypted: "true"
+  fsType: ext4
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: erpnext-sites-pv
+  labels:
+    app: erpnext
+    component: storage
+spec:
+  capacity:
+    storage: 100Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: efs-sc
+  csi:
+    driver: efs.csi.aws.com
+    volumeHandle: ${EFS_ID}  # Replace with actual EFS ID
+    volumeAttributes:
+      path: "/"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: erpnext-sites-pvc
+  namespace: erpnext
+  labels:
+    app: erpnext
+    component: storage
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: efs-sc
+  resources:
+    requests:
+      storage: 50Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: erpnext-backups-pvc
+  namespace: erpnext
+  labels:
+    app: erpnext
+    component: backups
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: ebs-gp3
+  resources:
+    requests:
+      storage: 100Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: erpnext-logs-pvc
+  namespace: erpnext
+  labels:
+    app: erpnext
+    component: logs
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: ebs-gp3
+  resources:
+    requests:
+      storage: 20Gi
