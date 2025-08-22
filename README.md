@@ -16,7 +16,7 @@ The following are the minimal [recommended requirements](https://github.com/frap
 * **Public Cloud**: More than 20+ major Cloud such as AWS, Azure, Google Cloud, Alibaba Cloud, HUAWEIClOUD, Tencent Cloud
 * **Private Cloud**: KVM, VMware, VirtualBox, OpenStack
 * **ARCH**:  Linux x86-64, ARM 32/64, Windows x86-64, IBM POWER8, x86/i686
-* **RAM**: 4 GB or more
+* **RAM**: 8 GB or more
 * **CPU**: 2 cores or higher
 * **HDD**: at least 20 GB of free space
 * **Swap file**: at least 2 GB
@@ -53,10 +53,11 @@ If you have not install Docker and Docker-Compose, refer to the following comman
 
 ```
 curl -fsSL https://get.docker.com -o get-docker.sh && sh get-docker.sh
-curl -L "https://github.com/docker/compose/releases/download/v2.1.1/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-sudo chmod +x /usr/local/bin/docker-compose
-ln -sf /usr/local/bin/docker-compose  /usr/bin
+sudo systemctl enable docker
 sudo systemctl start docker
+alias docker-compose='docker compose'
+echo "alias docker-compose='docker compose'" >> /etc/profile.d/docker-compose.sh
+source /etc/profile.d/docker-compose.sh
 ```
 
 #### Install ERPNext
@@ -68,7 +69,8 @@ git clone --depth=1 https://github.com/Websoft9/docker-erpnext
 cd docker-erpnext
 public_ip=`wget -O - https://download.websoft9.com/ansible/get_ip.sh | bash`  
 sudo sed -i s/erp.example.com/$public_ip/g ./.env  
-docker-compose  up -d
+docker network create websoft9 
+docker compose  up -d
 ```
 
 ### FAQ
@@ -79,10 +81,6 @@ Yes, you should modify all database password and application password at docker-
 #### Docker runing failed for the reason that port conflict?
 You should modify ports at [docker-compose file](docker-compose-production.yml) and docker-compose again
 
-#### Why does the erptext port use 8000, which violates the encoding specification of the compose file?  
-The use of 9001 or other ports will lead to errors in some containers and make the application unable to access normally  
-#### The default startup is erpnext12, What should I do if I want to run another version?  
- If you want to run erpnext13, you only need to change ERPNEXT_VERSION/FRAPPE_VERSIO to V13;Please delete volumes before edit configure  
 ### Usage instructions
 
 You can point your browser to: *`http://Instance's Internet IP:port`*  
@@ -97,12 +95,6 @@ By default, the available users are:
 | ------- | -------- |
 |  Administrator | admin  |
 
-#### Services and Ports
-
-| Service | Port | Use |  Necessity |
-| --- | --- | --- | --- |
-| erpnext | 8000 | Browser access to ERPNext by http | Y |
-| mariadb | 3306 | Accessing MySQL database with TCP | Y |
 ## Documentation
 
 [ERPNext Administrator Guide](https://support.websoft9.com/docs/erpnext)

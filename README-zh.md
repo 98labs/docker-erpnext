@@ -16,7 +16,7 @@
 * **公有云**: AWS, Azure, Google Cloud, 阿里云, 腾讯云, 华为云等20多个全球主流云
 * **私有云**: KVM, VMware, VirtualBox, OpenStack 等主流虚拟化架构
 * **CPU架构**: Linux x86-64, ARM 32/64, Windows x86-64, IBM POWER8, x86/i686
-* **内存**: 4GB以上
+* **内存**: 8GB以上
 * **CPU**: 2核以上
 * **存储**: 20GB以上
 * **Swap分区**: 2GB以上
@@ -57,10 +57,11 @@ sudo bash install-erpnext
 
 ```
 curl -fsSL https://get.docker.com -o get-docker.sh && sh get-docker.sh
-curl -L "https://github.com/docker/compose/releases/download/v2.1.1/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-sudo chmod +x /usr/local/bin/docker-compose
-ln -sf /usr/local/bin/docker-compose  /usr/bin
+sudo systemctl enable docker
 sudo systemctl start docker
+alias docker-compose='docker compose'
+echo "alias docker-compose='docker compose'" >> /etc/profile.d/docker-compose.sh
+source /etc/profile.d/docker-compose.sh
 ```
 
 #### 安装 ERPNext
@@ -72,7 +73,8 @@ git clone --depth=1 https://github.com/Websoft9/docker-erpnext
 cd docker-erpnext
 public_ip=`wget -O - https://download.websoft9.com/ansible/get_ip.sh | bash`  
 sudo sed -i s/erp.example.com/$public_ip/g ./.env  
-sudo docker-compose up -d
+sudo docker network create websoft9 
+sudo docker compose up -d
 ```
 
 ### 常见问题
@@ -85,10 +87,6 @@ sudo docker-compose up -d
 
 修改 [docker-compose](docker-compose.yml) 文件中冲突的端口，然后再启动容器
 
-#### 为什么ERPNext端口用8000，这违反了compose文件的编码规范？  
-因为使用9001或其他端口，将会导致部分容器发生错误，导致应用无法正常访问  
-#### 默认启动的ERPNext是v12，我想运行其他版本该如何操作  
-如果您想运行ERPNext13,只需将ERPNEXT_VERSION、FRAPPE_VERSION修改成v13；修改前需要删除volumes文件夹  
 ### 使用说明
 
 启动应用后，本地浏览器访问 URL: *`http://服务器公网IP:端口`* 进入应用。  
@@ -103,12 +101,6 @@ sudo docker-compose up -d
 | ------- | -------- |
 |  Administrator | admin  |
 
-#### 服务和端口
-
-| 名称 | 端口号 | 用途 |  必要性 |
-| --- | --- | --- | --- |
-| erpnext | 8000 | 浏览器访问 ERPNext | Y |
-| mariadb | 3306 | TCP 访问MariaDB数据库  | Y |
 ## 文档
 
 [ERPNext 管理员手册](https://support.websoft9.com/docs/erpnext)
