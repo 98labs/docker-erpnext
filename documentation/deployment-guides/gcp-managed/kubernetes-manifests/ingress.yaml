@@ -1,0 +1,319 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: erpnext-ingress
+  namespace: erpnext
+  labels:
+    app: erpnext
+    component: ingress
+    environment: production
+    deployment-type: managed-services
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/proxy-body-size: 50m
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "60"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    
+    # CORS configuration for managed services
+    nginx.ingress.kubernetes.io/cors-allow-origin: "*"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, PUT, DELETE, OPTIONS"
+    nginx.ingress.kubernetes.io/cors-allow-headers: "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range,Authorization"
+    nginx.ingress.kubernetes.io/cors-expose-headers: "Content-Length,Content-Range"
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    
+    # SSL configuration
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    
+    # Rate limiting for API protection
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+    
+    # Enhanced security headers for managed services
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      add_header X-Frame-Options SAMEORIGIN always;
+      add_header X-Content-Type-Options nosniff always;
+      add_header X-XSS-Protection "1; mode=block" always;
+      add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+      add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+      add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://storage.googleapis.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: https: https://storage.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' wss: https://storage.googleapis.com; frame-ancestors 'self';" always;
+      
+      # Custom headers for managed services
+      add_header X-Deployment-Type "managed-services" always;
+      add_header X-Backend-Type "cloud-sql-redis" always;
+      
+      # Performance optimizations
+      add_header Cache-Control "no-cache, no-store, must-revalidate" always;
+      add_header Pragma "no-cache" always;
+      add_header Expires "0" always;
+      
+      # Security for API endpoints
+      if ($request_uri ~* "^/api/") {
+        add_header X-API-Rate-Limit "100/min" always;
+      }
+    
+    # Server-side configuration snippet for managed services
+    nginx.ingress.kubernetes.io/server-snippet: |
+      # Rate limiting zones
+      limit_req_zone $binary_remote_addr zone=api:10m rate=10r/s;
+      limit_req_zone $binary_remote_addr zone=login:10m rate=5r/m;
+      limit_req_zone $binary_remote_addr zone=upload:10m rate=2r/s;
+      
+      # Connection limiting
+      limit_conn_zone $binary_remote_addr zone=conn_limit_per_ip:10m;
+      limit_conn conn_limit_per_ip 20;
+      
+      # Security configurations
+      server_tokens off;
+      client_header_timeout 10s;
+      client_body_timeout 10s;
+      
+      # Logging for managed services
+      access_log /var/log/nginx/erpnext-managed.access.log combined;
+      error_log /var/log/nginx/erpnext-managed.error.log warn;
+
+spec:
+  tls:
+  - hosts:
+    - erpnext.yourdomain.com
+    - api.yourdomain.com
+    secretName: erpnext-tls
+  rules:
+  - host: erpnext.yourdomain.com
+    http:
+      paths:
+      # Static assets - serve from Cloud Storage or CDN
+      - path: /assets
+        pathType: Prefix
+        backend:
+          service:
+            name: erpnext-frontend
+            port:
+              number: 8080
+      
+      # File uploads and downloads
+      - path: /files
+        pathType: Prefix
+        backend:
+          service:
+            name: erpnext-frontend
+            port:
+              number: 8080
+      
+      # Protected files
+      - path: /protected
+        pathType: Prefix
+        backend:
+          service:
+            name: erpnext-frontend
+            port:
+              number: 8080
+      
+      # WebSocket connections for real-time features
+      - path: /socket.io
+        pathType: Prefix
+        backend:
+          service:
+            name: erpnext-backend
+            port:
+              number: 9000
+      
+      # API endpoints with rate limiting
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: erpnext-frontend
+            port:
+              number: 8080
+      
+      # Method endpoints (Frappe framework)
+      - path: /method
+        pathType: Prefix
+        backend:
+          service:
+            name: erpnext-frontend
+            port:
+              number: 8080
+      
+      # Main application
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: erpnext-frontend
+            port:
+              number: 8080
+  
+  # API subdomain for cleaner separation
+  - host: api.yourdomain.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: erpnext-backend
+            port:
+              number: 8000
+---
+# Additional ingress for API-only access with stricter security
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: erpnext-api-ingress
+  namespace: erpnext
+  labels:
+    app: erpnext
+    component: api-ingress
+    environment: production
+    deployment-type: managed-services
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/proxy-body-size: 10m
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    
+    # Stricter rate limiting for API
+    nginx.ingress.kubernetes.io/rate-limit: "50"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+    
+    # API-specific security
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      # Stricter security for API access
+      add_header X-API-Version "v14" always;
+      add_header X-Rate-Limit "50/min" always;
+      
+      # Block non-API requests
+      if ($request_uri !~* "^/api/") {
+        return 404;
+      }
+      
+      # Additional API security headers
+      add_header X-API-Security "enhanced" always;
+
+spec:
+  tls:
+  - hosts:
+    - api-secure.yourdomain.com
+    secretName: erpnext-api-tls
+  rules:
+  - host: api-secure.yourdomain.com
+    http:
+      paths:
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: erpnext-backend
+            port:
+              number: 8000
+---
+# ClusterIssuer for Let's Encrypt SSL certificates
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: admin@yourdomain.com
+    privateKeySecretRef:
+      name: letsencrypt-prod
+    solvers:
+    - http01:
+        ingress:
+          class: nginx
+          podTemplate:
+            spec:
+              nodeSelector:
+                cloud.google.com/gke-preemptible: "false"
+---
+# Staging issuer for testing
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-staging
+spec:
+  acme:
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    email: admin@yourdomain.com
+    privateKeySecretRef:
+      name: letsencrypt-staging
+    solvers:
+    - http01:
+        ingress:
+          class: nginx
+---
+# Certificate for main domain
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: erpnext-cert
+  namespace: erpnext
+spec:
+  secretName: erpnext-tls
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+  dnsNames:
+  - erpnext.yourdomain.com
+  - api.yourdomain.com
+---
+# Certificate for API domain
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: erpnext-api-cert
+  namespace: erpnext
+spec:
+  secretName: erpnext-api-tls
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+  dnsNames:
+  - api-secure.yourdomain.com
+---
+# Nginx configuration for managed services optimization
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-ingress-config
+  namespace: ingress-nginx
+data:
+  # Global nginx configurations optimized for managed services
+  proxy-connect-timeout: "10"
+  proxy-send-timeout: "120"
+  proxy-read-timeout: "120"
+  proxy-body-size: "50m"
+  proxy-buffer-size: "4k"
+  proxy-buffers-number: "8"
+  
+  # Performance optimizations
+  worker-processes: "auto"
+  worker-connections: "16384"
+  worker-rlimit-nofile: "65536"
+  
+  # SSL optimizations
+  ssl-protocols: "TLSv1.2 TLSv1.3"
+  ssl-ciphers: "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384"
+  ssl-prefer-server-ciphers: "true"
+  ssl-session-cache: "shared:SSL:10m"
+  ssl-session-timeout: "10m"
+  
+  # Connection keep-alive
+  keep-alive: "75"
+  keep-alive-requests: "100"
+  
+  # Rate limiting for managed services
+  limit-req-status-code: "429"
+  limit-conn-status-code: "429"
+  
+  # Logging optimizations
+  log-format-escape-json: "true"
+  log-format-upstream: '{"time": "$time_iso8601", "remote_addr": "$proxy_protocol_addr", "x_forwarded_for": "$proxy_add_x_forwarded_for", "request_id": "$req_id", "remote_user": "$remote_user", "bytes_sent": $bytes_sent, "request_time": $request_time, "status": $status, "vhost": "$host", "request_proto": "$server_protocol", "path": "$uri", "request_query": "$args", "request_length": $request_length, "duration": $request_time,"method": "$request_method", "http_referrer": "$http_referer", "http_user_agent": "$http_user_agent", "upstream_addr": "$upstream_addr", "upstream_response_time": $upstream_response_time, "upstream_response_length": $upstream_response_length, "upstream_status": $upstream_status }'

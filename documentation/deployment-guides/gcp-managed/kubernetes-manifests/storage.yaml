@@ -1,0 +1,75 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ssd-retain
+provisioner: kubernetes.io/gce-pd
+parameters:
+  type: pd-ssd
+reclaimPolicy: Retain
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: standard-retain
+provisioner: kubernetes.io/gce-pd
+parameters:
+  type: pd-standard
+reclaimPolicy: Retain
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+---
+# ERPNext sites storage (smaller since database is external)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: erpnext-sites-pvc
+  namespace: erpnext
+  labels:
+    app: erpnext
+    component: sites
+    storage-type: application-files
+spec:
+  storageClassName: ssd-retain
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 30Gi  # Reduced since no database files
+---
+# ERPNext assets storage (for static files and uploads)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: erpnext-assets-pvc
+  namespace: erpnext
+  labels:
+    app: erpnext
+    component: assets
+    storage-type: static-files
+spec:
+  storageClassName: ssd-retain
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 15Gi  # Reduced for managed services
+---
+# Backup storage for application files only
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: backup-pvc
+  namespace: erpnext
+  labels:
+    app: erpnext
+    component: backup
+    storage-type: backup
+spec:
+  storageClassName: standard-retain
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 50Gi  # Smaller since database backups are handled by Cloud SQL

@@ -1,0 +1,696 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: erpnext-queue-default
+  namespace: erpnext
+  labels:
+    app: erpnext-queue-default
+    component: worker
+    queue: default
+    environment: production
+    version: v14
+    deployment-type: managed-services
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: erpnext-queue-default
+  template:
+    metadata:
+      labels:
+        app: erpnext-queue-default
+        component: worker
+        queue: default
+        environment: production
+        version: v14
+        deployment-type: managed-services
+    spec:
+      serviceAccountName: erpnext-ksa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: queue-worker
+        image: frappe/erpnext-worker:v14
+        command:
+        - bench
+        - worker
+        - --queue
+        - default
+        envFrom:
+        - configMapRef:
+            name: erpnext-managed-config
+        env:
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-managed-secrets
+              key: db-password
+        - name: REDIS_AUTH
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-managed-secrets
+              key: redis-auth
+        - name: GOOGLE_APPLICATION_CREDENTIALS
+          value: /var/secrets/google/key.json
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: sites-data
+          mountPath: /home/frappe/frappe-bench/sites
+        - name: tmp
+          mountPath: /tmp
+        - name: logs
+          mountPath: /home/frappe/frappe-bench/logs
+        - name: google-cloud-key
+          mountPath: /var/secrets/google
+          readOnly: true
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        livenessProbe:
+          exec:
+            command:
+            - pgrep
+            - -f
+            - "bench worker"
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+      - name: cloud-sql-proxy
+        image: gcr.io/cloudsql-docker/gce-proxy:1.35.4-alpine
+        command:
+        - /cloud_sql_proxy
+        - -instances=$(DB_CONNECTION_NAME)=tcp:127.0.0.1:3306
+        - -credential_file=/var/secrets/google/key.json
+        env:
+        - name: DB_CONNECTION_NAME
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-managed-secrets
+              key: db-connection-name
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 2
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: google-cloud-key
+          mountPath: /var/secrets/google
+          readOnly: true
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+      volumes:
+      - name: sites-data
+        persistentVolumeClaim:
+          claimName: erpnext-sites-pvc
+      - name: tmp
+        emptyDir: {}
+      - name: logs
+        emptyDir: {}
+      - name: google-cloud-key
+        secret:
+          secretName: gcp-service-account-key
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: erpnext-queue-long
+  namespace: erpnext
+  labels:
+    app: erpnext-queue-long
+    component: worker
+    queue: long
+    environment: production
+    version: v14
+    deployment-type: managed-services
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: erpnext-queue-long
+  template:
+    metadata:
+      labels:
+        app: erpnext-queue-long
+        component: worker
+        queue: long
+        environment: production
+        version: v14
+        deployment-type: managed-services
+    spec:
+      serviceAccountName: erpnext-ksa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: queue-worker
+        image: frappe/erpnext-worker:v14
+        command:
+        - bench
+        - worker
+        - --queue
+        - long
+        envFrom:
+        - configMapRef:
+            name: erpnext-managed-config
+        env:
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-managed-secrets
+              key: db-password
+        - name: REDIS_AUTH
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-managed-secrets
+              key: redis-auth
+        - name: GOOGLE_APPLICATION_CREDENTIALS
+          value: /var/secrets/google/key.json
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: sites-data
+          mountPath: /home/frappe/frappe-bench/sites
+        - name: tmp
+          mountPath: /tmp
+        - name: logs
+          mountPath: /home/frappe/frappe-bench/logs
+        - name: google-cloud-key
+          mountPath: /var/secrets/google
+          readOnly: true
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        livenessProbe:
+          exec:
+            command:
+            - pgrep
+            - -f
+            - "bench worker"
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+      - name: cloud-sql-proxy
+        image: gcr.io/cloudsql-docker/gce-proxy:1.35.4-alpine
+        command:
+        - /cloud_sql_proxy
+        - -instances=$(DB_CONNECTION_NAME)=tcp:127.0.0.1:3306
+        - -credential_file=/var/secrets/google/key.json
+        env:
+        - name: DB_CONNECTION_NAME
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-managed-secrets
+              key: db-connection-name
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 2
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: google-cloud-key
+          mountPath: /var/secrets/google
+          readOnly: true
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+      volumes:
+      - name: sites-data
+        persistentVolumeClaim:
+          claimName: erpnext-sites-pvc
+      - name: tmp
+        emptyDir: {}
+      - name: logs
+        emptyDir: {}
+      - name: google-cloud-key
+        secret:
+          secretName: gcp-service-account-key
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: erpnext-queue-short
+  namespace: erpnext
+  labels:
+    app: erpnext-queue-short
+    component: worker
+    queue: short
+    environment: production
+    version: v14
+    deployment-type: managed-services
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: erpnext-queue-short
+  template:
+    metadata:
+      labels:
+        app: erpnext-queue-short
+        component: worker
+        queue: short
+        environment: production
+        version: v14
+        deployment-type: managed-services
+    spec:
+      serviceAccountName: erpnext-ksa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: queue-worker
+        image: frappe/erpnext-worker:v14
+        command:
+        - bench
+        - worker
+        - --queue
+        - short
+        envFrom:
+        - configMapRef:
+            name: erpnext-managed-config
+        env:
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-managed-secrets
+              key: db-password
+        - name: REDIS_AUTH
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-managed-secrets
+              key: redis-auth
+        - name: GOOGLE_APPLICATION_CREDENTIALS
+          value: /var/secrets/google/key.json
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: sites-data
+          mountPath: /home/frappe/frappe-bench/sites
+        - name: tmp
+          mountPath: /tmp
+        - name: logs
+          mountPath: /home/frappe/frappe-bench/logs
+        - name: google-cloud-key
+          mountPath: /var/secrets/google
+          readOnly: true
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        livenessProbe:
+          exec:
+            command:
+            - pgrep
+            - -f
+            - "bench worker"
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+      - name: cloud-sql-proxy
+        image: gcr.io/cloudsql-docker/gce-proxy:1.35.4-alpine
+        command:
+        - /cloud_sql_proxy
+        - -instances=$(DB_CONNECTION_NAME)=tcp:127.0.0.1:3306
+        - -credential_file=/var/secrets/google/key.json
+        env:
+        - name: DB_CONNECTION_NAME
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-managed-secrets
+              key: db-connection-name
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 2
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: google-cloud-key
+          mountPath: /var/secrets/google
+          readOnly: true
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+      volumes:
+      - name: sites-data
+        persistentVolumeClaim:
+          claimName: erpnext-sites-pvc
+      - name: tmp
+        emptyDir: {}
+      - name: logs
+        emptyDir: {}
+      - name: google-cloud-key
+        secret:
+          secretName: gcp-service-account-key
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: erpnext-scheduler
+  namespace: erpnext
+  labels:
+    app: erpnext-scheduler
+    component: scheduler
+    environment: production
+    version: v14
+    deployment-type: managed-services
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: erpnext-scheduler
+  template:
+    metadata:
+      labels:
+        app: erpnext-scheduler
+        component: scheduler
+        environment: production
+        version: v14
+        deployment-type: managed-services
+    spec:
+      serviceAccountName: erpnext-ksa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: scheduler
+        image: frappe/erpnext-worker:v14
+        command:
+        - bench
+        - schedule
+        envFrom:
+        - configMapRef:
+            name: erpnext-managed-config
+        env:
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-managed-secrets
+              key: db-password
+        - name: REDIS_AUTH
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-managed-secrets
+              key: redis-auth
+        - name: GOOGLE_APPLICATION_CREDENTIALS
+          value: /var/secrets/google/key.json
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: sites-data
+          mountPath: /home/frappe/frappe-bench/sites
+        - name: tmp
+          mountPath: /tmp
+        - name: logs
+          mountPath: /home/frappe/frappe-bench/logs
+        - name: google-cloud-key
+          mountPath: /var/secrets/google
+          readOnly: true
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "250m"
+        livenessProbe:
+          exec:
+            command:
+            - pgrep
+            - -f
+            - "bench schedule"
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+      - name: cloud-sql-proxy
+        image: gcr.io/cloudsql-docker/gce-proxy:1.35.4-alpine
+        command:
+        - /cloud_sql_proxy
+        - -instances=$(DB_CONNECTION_NAME)=tcp:127.0.0.1:3306
+        - -credential_file=/var/secrets/google/key.json
+        env:
+        - name: DB_CONNECTION_NAME
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-managed-secrets
+              key: db-connection-name
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 2
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: google-cloud-key
+          mountPath: /var/secrets/google
+          readOnly: true
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+      volumes:
+      - name: sites-data
+        persistentVolumeClaim:
+          claimName: erpnext-sites-pvc
+      - name: tmp
+        emptyDir: {}
+      - name: logs
+        emptyDir: {}
+      - name: google-cloud-key
+        secret:
+          secretName: gcp-service-account-key
+      nodeSelector:
+        cloud.google.com/gke-preemptible: "false"
+---
+# HPA for queue workers based on queue depth
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: erpnext-queue-default-hpa
+  namespace: erpnext
+  labels:
+    app: erpnext-queue-default
+    component: worker
+    deployment-type: managed-services
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: erpnext-queue-default
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+      - type: Pods
+        value: 2
+        periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Pods
+        value: 1
+        periodSeconds: 60
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: erpnext-queue-short-hpa
+  namespace: erpnext
+  labels:
+    app: erpnext-queue-short
+    component: worker
+    deployment-type: managed-services
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: erpnext-queue-short
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+      - type: Pods
+        value: 2
+        periodSeconds: 30
+    scaleDown:
+      stabilizationWindowSeconds: 180
+      policies:
+      - type: Pods
+        value: 1
+        periodSeconds: 60
+---
+# Network Policy for worker services
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: erpnext-workers-netpol
+  namespace: erpnext
+spec:
+  podSelector:
+    matchLabels:
+      component: worker
+  policyTypes:
+  - Egress
+  egress:
+  # Allow DNS resolution
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  # Allow access to managed services
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 3306  # Cloud SQL
+    - protocol: TCP
+      port: 6379  # Redis
+    - protocol: TCP
+      port: 443   # HTTPS for GCP APIs
+---
+# Network Policy for scheduler
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: erpnext-scheduler-netpol
+  namespace: erpnext
+spec:
+  podSelector:
+    matchLabels:
+      app: erpnext-scheduler
+  policyTypes:
+  - Egress
+  egress:
+  # Allow DNS resolution
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  # Allow access to managed services
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 3306  # Cloud SQL
+    - protocol: TCP
+      port: 6379  # Redis
+    - protocol: TCP
+      port: 443   # HTTPS for GCP APIs

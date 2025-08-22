@@ -1,0 +1,606 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: erpnext-create-site
+  namespace: erpnext
+  labels:
+    app: erpnext
+    component: setup
+    job-type: create-site
+    deployment-type: managed-services
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 1800  # 30 minutes timeout
+  template:
+    metadata:
+      labels:
+        app: erpnext
+        component: setup
+        job-type: create-site
+        deployment-type: managed-services
+    spec:
+      serviceAccountName: erpnext-ksa
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+      - name: wait-for-managed-services
+        image: busybox:1.35
+        command:
+        - sh
+        - -c
+        - |
+          echo 'Waiting for Cloud SQL and Redis managed services...'
+          
+          # Wait for Cloud SQL Proxy to establish connection
+          until nc -z 127.0.0.1 3306; do
+            echo 'Waiting for Cloud SQL connection...'
+            sleep 10
+          done
+          
+          # Test Redis connection
+          echo 'Testing Redis connection...'
+          timeout 30 sh -c 'until nc -z $REDIS_HOST 6379; do sleep 5; done'
+          
+          echo 'All managed services are ready!'
+          
+          # Additional wait for services to be fully ready
+          sleep 30
+        env:
+        - name: REDIS_HOST
+          value: "REDIS_HOST_PLACEHOLDER"  # Will be replaced by deployment script
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          capabilities:
+            drop:
+            - ALL
+      containers:
+      - name: create-site
+        image: frappe/erpnext-worker:v14
+        command:
+        - bash
+        - -c
+        - |
+          set -e
+          echo "Starting ERPNext site creation with managed services..."
+          
+          # Set up environment for managed services
+          export DB_HOST="127.0.0.1"
+          export DB_PORT="3306"
+          
+          # Check if site already exists
+          if [ -d "/home/frappe/frappe-bench/sites/frontend" ]; then
+            echo "Site 'frontend' already exists. Checking configuration..."
+            
+            # Update site configuration for managed services
+            cd /home/frappe/frappe-bench
+            bench --site frontend set-config db_host "$DB_HOST"
+            bench --site frontend set-config db_port "$DB_PORT"
+            bench --site frontend set-config redis_cache "redis://$REDIS_HOST:6379/0"
+            bench --site frontend set-config redis_queue "redis://$REDIS_HOST:6379/1"
+            bench --site frontend set-config redis_socketio "redis://$REDIS_HOST:6379/2"
+            
+            echo "Site configuration updated for managed services."
+            exit 0
+          fi
+          
+          echo "Creating new ERPNext site with managed services..."
+          cd /home/frappe/frappe-bench
+          
+          # Create the site with managed database
+          bench new-site frontend \
+            --admin-password "$ADMIN_PASSWORD" \
+            --mariadb-root-password "$DB_PASSWORD" \
+            --db-host "$DB_HOST" \
+            --db-port "$DB_PORT" \
+            --install-app erpnext \
+            --set-default
+          
+          # Configure Redis for managed Memorystore
+          echo "Configuring Redis for Memorystore..."
+          bench --site frontend set-config redis_cache "redis://$REDIS_HOST:6379/0"
+          bench --site frontend set-config redis_queue "redis://$REDIS_HOST:6379/1"
+          bench --site frontend set-config redis_socketio "redis://$REDIS_HOST:6379/2"
+          
+          # Set additional configurations for managed services
+          bench --site frontend set-config developer_mode 0
+          bench --site frontend set-config server_script_enabled 1
+          bench --site frontend set-config allow_tests 0
+          bench --site frontend set-config auto_update 0
+          bench --site frontend set-config enable_scheduler 1
+          
+          # Configure for Cloud Storage
+          bench --site frontend set-config use_google_cloud_storage 1
+          bench --site frontend set-config google_cloud_storage_bucket "$CLOUD_STORAGE_BUCKET"
+          
+          # Set up email configuration (optional)
+          bench --site frontend set-config mail_server "smtp.gmail.com"
+          bench --site frontend set-config mail_port 587
+          bench --site frontend set-config use_tls 1
+          
+          # Install additional apps if needed
+          # bench --site frontend install-app custom_app
+          
+          # Run post-installation setup
+          bench --site frontend migrate
+          bench --site frontend clear-cache
+          
+          echo "Site creation completed successfully with managed services!"
+          
+          # Verify the setup
+          echo "Verifying installation..."
+          bench --site frontend list-apps
+          
+          # Create initial data if needed
+          # bench --site frontend execute frappe.utils.install.make_demo_data
+          
+          echo "ERPNext installation verification completed."
+        envFrom:
+        - configMapRef:
+            name: erpnext-managed-config
+        env:
+        - name: ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-managed-secrets
+              key: admin-password
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-managed-secrets
+              key: db-password
+        - name: REDIS_HOST
+          value: "REDIS_HOST_PLACEHOLDER"  # Will be replaced by deployment script
+        - name: CLOUD_STORAGE_BUCKET
+          value: "erpnext-files-PROJECT_ID"
+        - name: GOOGLE_APPLICATION_CREDENTIALS
+          value: /var/secrets/google/key.json
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: sites-data
+          mountPath: /home/frappe/frappe-bench/sites
+        - name: tmp
+          mountPath: /tmp
+        - name: google-cloud-key
+          mountPath: /var/secrets/google
+          readOnly: true
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+      - name: cloud-sql-proxy
+        image: gcr.io/cloudsql-docker/gce-proxy:1.35.4-alpine
+        command:
+        - /cloud_sql_proxy
+        - -instances=$(DB_CONNECTION_NAME)=tcp:127.0.0.1:3306
+        - -credential_file=/var/secrets/google/key.json
+        - -enable_iam_login
+        env:
+        - name: DB_CONNECTION_NAME
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-managed-secrets
+              key: db-connection-name
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 2
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: google-cloud-key
+          mountPath: /var/secrets/google
+          readOnly: true
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+      volumes:
+      - name: sites-data
+        persistentVolumeClaim:
+          claimName: erpnext-sites-pvc
+      - name: tmp
+        emptyDir: {}
+      - name: google-cloud-key
+        secret:
+          secretName: gcp-service-account-key
+---
+# CronJob for backing up site files (database is handled by Cloud SQL)
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: erpnext-files-backup
+  namespace: erpnext
+  labels:
+    app: erpnext
+    component: backup
+    backup-type: files
+    deployment-type: managed-services
+spec:
+  schedule: "0 3 * * *"  # Daily at 3 AM
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 7
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 3600  # 1 hour timeout
+      template:
+        metadata:
+          labels:
+            app: erpnext
+            component: backup
+            backup-type: files
+            deployment-type: managed-services
+        spec:
+          serviceAccountName: erpnext-ksa
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            fsGroup: 1000
+          containers:
+          - name: files-backup
+            image: google/cloud-sdk:alpine
+            command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              
+              BACKUP_DATE=$(date +%Y%m%d_%H%M%S)
+              BACKUP_FILE="erpnext_files_backup_${BACKUP_DATE}.tar.gz"
+              
+              echo "Starting ERPNext files backup: $BACKUP_FILE"
+              
+              # Create compressed backup of sites directory
+              echo "Creating compressed archive..."
+              tar -czf /tmp/$BACKUP_FILE -C /sites \
+                --exclude='*.log' \
+                --exclude='*.tmp' \
+                --exclude='__pycache__' \
+                .
+              
+              # Get file size
+              BACKUP_SIZE=$(stat -f%z /tmp/$BACKUP_FILE 2>/dev/null || stat -c%s /tmp/$BACKUP_FILE 2>/dev/null || echo "unknown")
+              echo "Backup file size: $BACKUP_SIZE bytes"
+              
+              # Upload to Cloud Storage with metadata
+              echo "Uploading to Cloud Storage..."
+              gsutil -h "x-goog-meta-backup-date:$BACKUP_DATE" \
+                     -h "x-goog-meta-backup-type:files" \
+                     -h "x-goog-meta-deployment-type:managed-services" \
+                     -h "x-goog-meta-source:erpnext-gke" \
+                     cp /tmp/$BACKUP_FILE gs://erpnext-backups-$PROJECT_ID/files/
+              
+              echo "Files backup uploaded to GCS: gs://erpnext-backups-$PROJECT_ID/files/$BACKUP_FILE"
+              
+              # Verify upload
+              if gsutil ls gs://erpnext-backups-$PROJECT_ID/files/$BACKUP_FILE > /dev/null 2>&1; then
+                echo "Backup verification successful"
+              else
+                echo "Backup verification failed!"
+                exit 1
+              fi
+              
+              # Clean up local file
+              rm /tmp/$BACKUP_FILE
+              
+              # Clean up old backups (keep last 30 days)
+              echo "Cleaning up old backups..."
+              gsutil -m rm -r gs://erpnext-backups-$PROJECT_ID/files/erpnext_files_backup_$(date -d '30 days ago' +%Y%m%d)_* 2>/dev/null || true
+              
+              echo "Files backup completed successfully!"
+            env:
+            - name: PROJECT_ID
+              value: "PROJECT_ID_PLACEHOLDER"  # Will be replaced by deployment script
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: /var/secrets/google/key.json
+            securityContext:
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              runAsNonRoot: true
+              runAsUser: 1000
+              runAsGroup: 1000
+              capabilities:
+                drop:
+                - ALL
+            volumeMounts:
+            - name: sites-data
+              mountPath: /sites
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+            - name: google-cloud-key
+              mountPath: /var/secrets/google
+              readOnly: true
+            resources:
+              requests:
+                memory: "256Mi"
+                cpu: "100m"
+              limits:
+                memory: "512Mi"
+                cpu: "250m"
+          volumes:
+          - name: sites-data
+            persistentVolumeClaim:
+              claimName: erpnext-sites-pvc
+          - name: tmp
+            emptyDir: {}
+          - name: google-cloud-key
+            secret:
+              secretName: gcp-service-account-key
+---
+# Job for database migration (for upgrades)
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: erpnext-migrate
+  namespace: erpnext
+  labels:
+    app: erpnext
+    component: maintenance
+    job-type: migrate
+    deployment-type: managed-services
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 3600  # 1 hour timeout
+  template:
+    metadata:
+      labels:
+        app: erpnext
+        component: maintenance
+        job-type: migrate
+        deployment-type: managed-services
+    spec:
+      serviceAccountName: erpnext-ksa
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+      - name: wait-for-services
+        image: busybox:1.35
+        command:
+        - sh
+        - -c
+        - |
+          echo 'Waiting for managed services...'
+          until nc -z 127.0.0.1 3306; do
+            echo 'Waiting for Cloud SQL...'
+            sleep 5
+          done
+          echo 'Services ready for migration'
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          capabilities:
+            drop:
+            - ALL
+      containers:
+      - name: migrate
+        image: frappe/erpnext-worker:v14
+        command:
+        - bash
+        - -c
+        - |
+          set -e
+          echo "Starting ERPNext migration with managed services..."
+          
+          cd /home/frappe/frappe-bench
+          
+          # Create backup before migration
+          echo "Creating pre-migration backup..."
+          bench --site all backup --with-files
+          
+          # Run database migrations
+          echo "Running database migrations..."
+          bench --site all migrate
+          
+          # Clear cache
+          echo "Clearing cache..."
+          bench --site all clear-cache
+          
+          # Clear website cache
+          echo "Clearing website cache..."
+          bench --site all clear-website-cache
+          
+          # Rebuild search index if needed
+          echo "Rebuilding search index..."
+          bench --site all build-search-index || true
+          
+          # Update translations
+          echo "Updating translations..."
+          bench --site all build-translations || true
+          
+          # Verify migration
+          echo "Verifying migration..."
+          bench --site all list-apps
+          
+          echo "Migration completed successfully with managed services!"
+        envFrom:
+        - configMapRef:
+            name: erpnext-managed-config
+        env:
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-managed-secrets
+              key: db-password
+        - name: GOOGLE_APPLICATION_CREDENTIALS
+          value: /var/secrets/google/key.json
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: sites-data
+          mountPath: /home/frappe/frappe-bench/sites
+        - name: tmp
+          mountPath: /tmp
+        - name: google-cloud-key
+          mountPath: /var/secrets/google
+          readOnly: true
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+      - name: cloud-sql-proxy
+        image: gcr.io/cloudsql-docker/gce-proxy:1.35.4-alpine
+        command:
+        - /cloud_sql_proxy
+        - -instances=$(DB_CONNECTION_NAME)=tcp:127.0.0.1:3306
+        - -credential_file=/var/secrets/google/key.json
+        env:
+        - name: DB_CONNECTION_NAME
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-managed-secrets
+              key: db-connection-name
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 2
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: google-cloud-key
+          mountPath: /var/secrets/google
+          readOnly: true
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+      volumes:
+      - name: sites-data
+        persistentVolumeClaim:
+          claimName: erpnext-sites-pvc
+      - name: tmp
+        emptyDir: {}
+      - name: google-cloud-key
+        secret:
+          secretName: gcp-service-account-key
+---
+# CronJob for health checks and maintenance
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: erpnext-health-check
+  namespace: erpnext
+  labels:
+    app: erpnext
+    component: maintenance
+    job-type: health-check
+    deployment-type: managed-services
+spec:
+  schedule: "*/15 * * * *"  # Every 15 minutes
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 300  # 5 minutes timeout
+      template:
+        metadata:
+          labels:
+            app: erpnext
+            component: maintenance
+            job-type: health-check
+            deployment-type: managed-services
+        spec:
+          serviceAccountName: erpnext-ksa
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            fsGroup: 1000
+          containers:
+          - name: health-check
+            image: curlimages/curl:latest
+            command:
+            - sh
+            - -c
+            - |
+              set -e
+              echo "Running ERPNext health checks..."
+              
+              # Check frontend service
+              echo "Checking frontend service..."
+              curl -f http://erpnext-frontend:8080/health || exit 1
+              
+              # Check backend service
+              echo "Checking backend service..."
+              curl -f http://erpnext-backend:8000/api/method/ping || exit 1
+              
+              # Check Redis connectivity (if accessible from cluster)
+              echo "Checking Redis connectivity..."
+              # This would require a Redis client in the image
+              # nc -z $REDIS_HOST 6379 || exit 1
+              
+              echo "All health checks passed!"
+            env:
+            - name: REDIS_HOST
+              value: "REDIS_HOST_PLACEHOLDER"
+            securityContext:
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              runAsNonRoot: true
+              runAsUser: 65534  # nobody user in curl image
+              capabilities:
+                drop:
+                - ALL
+            resources:
+              requests:
+                memory: "64Mi"
+                cpu: "50m"
+              limits:
+                memory: "128Mi"
+                cpu: "100m"

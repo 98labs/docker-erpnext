@@ -1,0 +1,279 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: erpnext-managed-config
+  namespace: erpnext
+  labels:
+    app: erpnext
+    component: config
+    deployment-type: managed-services
+data:
+  # ERPNext Application Configuration
+  APP_VERSION: "v14"
+  APP_URL: "erpnext.yourdomain.com"
+  APP_USER: "Administrator"
+  APP_DB_PARAM: "db"
+  DEVELOPER_MODE: "0"
+  ENABLE_SCHEDULER: "1"
+  SOCKETIO_PORT: "9000"
+  
+  # Cloud SQL Configuration (via Cloud SQL Proxy)
+  DB_HOST: "127.0.0.1"
+  DB_PORT: "3306"
+  DB_NAME: "erpnext"
+  DB_USER: "erpnext"
+  DB_TIMEOUT: "60"
+  DB_CHARSET: "utf8mb4"
+  
+  # Memorystore Redis Configuration
+  # Note: REDIS_HOST will be set by deployment script
+  REDIS_PORT: "6379"
+  REDIS_CACHE_URL: "redis://REDIS_HOST:6379/0"
+  REDIS_QUEUE_URL: "redis://REDIS_HOST:6379/1"
+  REDIS_SOCKETIO_URL: "redis://REDIS_HOST:6379/2"
+  REDIS_TIMEOUT: "5"
+  REDIS_MAX_CONNECTIONS: "20"
+  
+  # Performance settings optimized for managed services
+  WORKER_PROCESSES: "4"
+  WORKER_TIMEOUT: "120"
+  WORKER_MAX_REQUESTS: "1000"
+  WORKER_MAX_REQUESTS_JITTER: "50"
+  
+  # Logging settings for Cloud Logging
+  LOG_LEVEL: "INFO"
+  LOG_FORMAT: "json"
+  ENABLE_CLOUD_LOGGING: "1"
+  
+  # Cloud SQL Proxy settings
+  CLOUDSQL_CONNECTION_NAME: "PROJECT_ID:REGION:erpnext-db"
+  ENABLE_CLOUDSQL_PROXY: "1"
+  
+  # Cloud Storage settings for file uploads
+  USE_CLOUD_STORAGE: "1"
+  CLOUD_STORAGE_BUCKET: "erpnext-files-PROJECT_ID"
+  
+  # Security settings
+  SECURE_HEADERS: "1"
+  CSRF_PROTECTION: "1"
+  SESSION_SECURE: "1"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-managed-config
+  namespace: erpnext
+  labels:
+    app: erpnext
+    component: nginx
+    deployment-type: managed-services
+data:
+  nginx.conf: |
+    user nginx;
+    worker_processes auto;
+    error_log /var/log/nginx/error.log notice;
+    pid /var/run/nginx.pid;
+
+    events {
+        worker_connections 1024;
+        use epoll;
+        multi_accept on;
+    }
+
+    http {
+        include /etc/nginx/mime.types;
+        default_type application/octet-stream;
+
+        # Enhanced logging for managed services
+        log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                        '$status $body_bytes_sent "$http_referer" '
+                        '"$http_user_agent" "$http_x_forwarded_for" '
+                        'rt=$request_time uct="$upstream_connect_time" '
+                        'uht="$upstream_header_time" urt="$upstream_response_time"';
+
+        access_log /var/log/nginx/access.log main;
+
+        sendfile on;
+        tcp_nopush on;
+        tcp_nodelay on;
+        keepalive_timeout 65;
+        types_hash_max_size 2048;
+        client_max_body_size 50m;
+
+        # Enhanced gzip configuration
+        gzip on;
+        gzip_vary on;
+        gzip_proxied any;
+        gzip_comp_level 6;
+        gzip_types
+            text/plain
+            text/css
+            text/xml
+            text/javascript
+            application/json
+            application/javascript
+            application/xml+rss
+            application/atom+xml
+            image/svg+xml;
+
+        # Connection pooling for backend
+        upstream backend {
+            server erpnext-backend:8000;
+            keepalive 32;
+            keepalive_requests 100;
+            keepalive_timeout 60s;
+        }
+
+        upstream socketio {
+            server erpnext-backend:9000;
+            keepalive 16;
+        }
+
+        # Rate limiting zones
+        limit_req_zone $binary_remote_addr zone=api:10m rate=10r/s;
+        limit_req_zone $binary_remote_addr zone=login:10m rate=5r/m;
+
+        server {
+            listen 8080;
+            server_name _;
+            root /home/frappe/frappe-bench/sites;
+
+            # Enhanced security headers for managed services
+            add_header X-Frame-Options SAMEORIGIN always;
+            add_header X-Content-Type-Options nosniff always;
+            add_header X-XSS-Protection "1; mode=block" always;
+            add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+            add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+            add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' wss:; frame-ancestors 'self';" always;
+
+            # Static assets with enhanced caching
+            location /assets {
+                try_files $uri =404;
+                expires 1y;
+                add_header Cache-Control "public, immutable";
+                add_header Vary "Accept-Encoding";
+                
+                # Serve from Cloud Storage for managed deployments
+                location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
+                    proxy_pass https://storage.googleapis.com/erpnext-files-PROJECT_ID/assets$uri;
+                    proxy_set_header Host storage.googleapis.com;
+                    proxy_cache_valid 200 1y;
+                    expires 1y;
+                    add_header Cache-Control "public, immutable";
+                }
+            }
+
+            # Protected files
+            location ~ ^/protected/(.*) {
+                internal;
+                try_files /frontend/$1 =404;
+            }
+
+            # WebSocket connections with enhanced handling
+            location /socket.io/ {
+                proxy_http_version 1.1;
+                proxy_set_header Upgrade $http_upgrade;
+                proxy_set_header Connection "upgrade";
+                proxy_set_header X-Frappe-Site-Name frontend;
+                proxy_set_header Origin $scheme://$http_host;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+                
+                # Enhanced timeouts for WebSocket
+                proxy_read_timeout 300s;
+                proxy_send_timeout 300s;
+                proxy_connect_timeout 10s;
+                
+                proxy_pass http://socketio;
+            }
+
+            # API endpoints with rate limiting
+            location /api/ {
+                limit_req zone=api burst=20 nodelay;
+                
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+                proxy_set_header X-Frappe-Site-Name frontend;
+                proxy_set_header Host $host;
+                proxy_set_header X-Use-X-Accel-Redirect True;
+                proxy_set_header X-Real-IP $remote_addr;
+                
+                # Enhanced timeouts for API calls
+                proxy_read_timeout 120s;
+                proxy_send_timeout 120s;
+                proxy_connect_timeout 10s;
+                
+                proxy_redirect off;
+                proxy_buffering off;
+                
+                proxy_pass http://backend;
+            }
+
+            # Login endpoint with stricter rate limiting
+            location /api/method/login {
+                limit_req zone=login burst=3 nodelay;
+                
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+                proxy_set_header X-Frappe-Site-Name frontend;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                
+                proxy_pass http://backend;
+            }
+
+            # Main application routes
+            location / {
+                try_files /frontend/public/$uri @webserver;
+            }
+
+            location @webserver {
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+                proxy_set_header X-Frappe-Site-Name frontend;
+                proxy_set_header Host $host;
+                proxy_set_header X-Use-X-Accel-Redirect True;
+                proxy_set_header X-Real-IP $remote_addr;
+                
+                proxy_read_timeout 120s;
+                proxy_send_timeout 120s;
+                proxy_connect_timeout 10s;
+                
+                proxy_redirect off;
+                proxy_buffering on;
+                proxy_buffer_size 4k;
+                proxy_buffers 8 4k;
+                
+                proxy_pass http://backend;
+            }
+
+            # Health check endpoint
+            location /health {
+                access_log off;
+                return 200 "healthy\n";
+                add_header Content-Type text/plain;
+            }
+
+            # Metrics endpoint for monitoring
+            location /metrics {
+                access_log off;
+                proxy_pass http://backend/api/method/frappe.utils.response.get_response_length;
+                allow 10.0.0.0/8;  # VPC internal only
+                deny all;
+            }
+
+            # Block access to sensitive files
+            location ~* \.(conf|htaccess|htpasswd|ini|log|sh|sql|tar|gz|bak|backup)$ {
+                deny all;
+                return 404;
+            }
+
+            # Block access to hidden files
+            location ~ /\. {
+                deny all;
+                return 404;
+            }
+        }
+    }

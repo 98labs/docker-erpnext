@@ -1,0 +1,338 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: erpnext-frontend
+  namespace: erpnext
+  labels:
+    app: erpnext-frontend
+    component: frontend
+    environment: production
+    version: v14
+    deployment-type: managed-services
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: erpnext-frontend
+  template:
+    metadata:
+      labels:
+        app: erpnext-frontend
+        component: frontend
+        environment: production
+        version: v14
+        deployment-type: managed-services
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/health"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        fsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - erpnext-frontend
+              topologyKey: kubernetes.io/hostname
+      initContainers:
+      - name: setup-nginx-config
+        image: busybox:1.35
+        command:
+        - sh
+        - -c
+        - |
+          # Copy base nginx config
+          cp /config/nginx.conf /shared/nginx.conf
+          
+          # Replace placeholders with actual values
+          sed -i "s/PROJECT_ID/$PROJECT_ID/g" /shared/nginx.conf
+          
+          echo "Nginx configuration prepared"
+        env:
+        - name: PROJECT_ID
+          valueFrom:
+            configMapRef:
+              name: erpnext-managed-config
+              key: PROJECT_ID
+              optional: true
+        volumeMounts:
+        - name: nginx-config
+          mountPath: /config
+        - name: nginx-config-processed
+          mountPath: /shared
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          capabilities:
+            drop:
+            - ALL
+      containers:
+      - name: erpnext-frontend
+        image: frappe/erpnext-nginx:v14
+        ports:
+        - containerPort: 8080
+          name: http
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 101
+          runAsGroup: 101
+          capabilities:
+            drop:
+            - ALL
+            add:
+            - NET_BIND_SERVICE
+        volumeMounts:
+        - name: sites-data
+          mountPath: /home/frappe/frappe-bench/sites
+          readOnly: true
+        - name: assets-data
+          mountPath: /home/frappe/frappe-bench/sites/assets
+          readOnly: true
+        - name: nginx-config-processed
+          mountPath: /etc/nginx/nginx.conf
+          subPath: nginx.conf
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
+        - name: var-cache
+          mountPath: /var/cache/nginx
+        - name: var-run
+          mountPath: /var/run
+        - name: var-log
+          mountPath: /var/log/nginx
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 12
+        env:
+        - name: NGINX_WORKER_PROCESSES
+          value: "auto"
+        - name: NGINX_WORKER_CONNECTIONS
+          value: "1024"
+      volumes:
+      - name: sites-data
+        persistentVolumeClaim:
+          claimName: erpnext-sites-pvc
+      - name: assets-data
+        persistentVolumeClaim:
+          claimName: erpnext-assets-pvc
+      - name: nginx-config
+        configMap:
+          name: nginx-managed-config
+      - name: nginx-config-processed
+        emptyDir: {}
+      - name: tmp
+        emptyDir: {}
+      - name: var-cache
+        emptyDir: {}
+      - name: var-run
+        emptyDir: {}
+      - name: var-log
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: erpnext-frontend
+  namespace: erpnext
+  labels:
+    app: erpnext-frontend
+    component: frontend
+    deployment-type: managed-services
+  annotations:
+    cloud.google.com/neg: '{"ingress": true}'
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8080"
+spec:
+  selector:
+    app: erpnext-frontend
+  ports:
+  - port: 8080
+    targetPort: 8080
+    name: http
+    protocol: TCP
+  type: ClusterIP
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: erpnext-frontend-hpa
+  namespace: erpnext
+  labels:
+    app: erpnext-frontend
+    component: frontend
+    deployment-type: managed-services
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: erpnext-frontend
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 50
+        periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 15
+      - type: Pods
+        value: 1
+        periodSeconds: 60
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: erpnext-frontend-pdb
+  namespace: erpnext
+  labels:
+    app: erpnext-frontend
+    component: frontend
+    deployment-type: managed-services
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: erpnext-frontend
+---
+# Network Policy for frontend service
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: erpnext-frontend-netpol
+  namespace: erpnext
+spec:
+  podSelector:
+    matchLabels:
+      app: erpnext-frontend
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Allow traffic from ingress controller
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+    ports:
+    - protocol: TCP
+      port: 8080
+  # Allow traffic from monitoring
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    ports:
+    - protocol: TCP
+      port: 8080
+  egress:
+  # Allow DNS resolution
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  # Allow communication with backend
+  - to:
+    - podSelector:
+        matchLabels:
+          app: erpnext-backend
+    ports:
+    - protocol: TCP
+      port: 8000
+    - protocol: TCP
+      port: 9000
+  # Allow access to Cloud Storage for assets
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443  # HTTPS for Cloud Storage
+---
+# Service Monitor for Prometheus (if using Prometheus Operator)
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: erpnext-frontend-monitor
+  namespace: erpnext
+  labels:
+    app: erpnext-frontend
+    component: frontend
+    deployment-type: managed-services
+spec:
+  selector:
+    matchLabels:
+      app: erpnext-frontend
+  endpoints:
+  - port: http
+    path: /health
+    interval: 30s
+    scrapeTimeout: 10s
