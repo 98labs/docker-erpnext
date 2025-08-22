@@ -1,0 +1,403 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: erpnext-create-site
+  namespace: erpnext
+  labels:
+    app: erpnext
+    component: setup
+    job-type: create-site
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: erpnext
+        component: setup
+        job-type: create-site
+    spec:
+      serviceAccountName: erpnext-ksa
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      initContainers:
+      - name: wait-for-services
+        image: busybox:1.35
+        command:
+        - sh
+        - -c
+        - |
+          echo 'Waiting for database and redis...'
+          until nc -z mariadb 3306 && nc -z redis 6379; do
+            echo 'Waiting for services...'
+            sleep 5
+          done
+          echo 'Services are ready!'
+          
+          # Additional wait for database to be fully ready
+          sleep 30
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          capabilities:
+            drop:
+            - ALL
+      containers:
+      - name: create-site
+        image: frappe/erpnext-worker:v14
+        command:
+        - bash
+        - -c
+        - |
+          set -e
+          echo "Starting ERPNext site creation..."
+          
+          # Check if site already exists
+          if [ -d "/home/frappe/frappe-bench/sites/frontend" ]; then
+            echo "Site 'frontend' already exists. Skipping creation."
+            exit 0
+          fi
+          
+          # Create the site
+          bench new-site frontend \
+            --admin-password "$ADMIN_PASSWORD" \
+            --mariadb-root-password "$DB_PASSWORD" \
+            --install-app erpnext \
+            --set-default
+          
+          # Set site configuration
+          bench --site frontend set-config developer_mode 0
+          bench --site frontend set-config server_script_enabled 1
+          bench --site frontend set-config allow_tests 0
+          
+          # Install additional apps if needed
+          # bench --site frontend install-app custom_app
+          
+          echo "Site creation completed successfully!"
+        envFrom:
+        - configMapRef:
+            name: erpnext-config
+        env:
+        - name: ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-secrets
+              key: admin-password
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-secrets
+              key: db-password
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: sites-data
+          mountPath: /home/frappe/frappe-bench/sites
+        - name: tmp
+          mountPath: /tmp
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+      volumes:
+      - name: sites-data
+        persistentVolumeClaim:
+          claimName: erpnext-sites-pvc
+      - name: tmp
+        emptyDir: {}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: erpnext-db-backup
+  namespace: erpnext
+  labels:
+    app: erpnext
+    component: backup
+    backup-type: database
+spec:
+  schedule: "0 2 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app: erpnext
+            component: backup
+            backup-type: database
+        spec:
+          serviceAccountName: erpnext-ksa
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 999
+            runAsGroup: 999
+            fsGroup: 999
+          containers:
+          - name: backup
+            image: mysql:8.0
+            command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              
+              BACKUP_DATE=$(date +%Y%m%d_%H%M%S)
+              BACKUP_FILE="erpnext_backup_${BACKUP_DATE}.sql"
+              
+              echo "Starting database backup: $BACKUP_FILE"
+              
+              # Create backup
+              mysqldump -h mariadb -u erpnext -p$DB_PASSWORD \
+                --single-transaction \
+                --routines \
+                --triggers \
+                --events \
+                --default-character-set=utf8mb4 \
+                erpnext > /backup/$BACKUP_FILE
+              
+              # Compress backup
+              gzip /backup/$BACKUP_FILE
+              
+              # Upload to Google Cloud Storage
+              if command -v gsutil &> /dev/null; then
+                gsutil cp /backup/$BACKUP_FILE.gz gs://erpnext-backups/database/
+                echo "Backup uploaded to GCS: gs://erpnext-backups/database/$BACKUP_FILE.gz"
+              else
+                echo "gsutil not available, backup saved locally only"
+              fi
+              
+              # Clean up local backups older than 7 days
+              find /backup -name "*.gz" -mtime +7 -delete
+              
+              echo "Backup completed successfully!"
+            env:
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: erpnext-secrets
+                  key: db-password
+            securityContext:
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              runAsNonRoot: true
+              runAsUser: 999
+              runAsGroup: 999
+              capabilities:
+                drop:
+                - ALL
+            volumeMounts:
+            - name: backup-storage
+              mountPath: /backup
+            - name: tmp
+              mountPath: /tmp
+            resources:
+              requests:
+                memory: "256Mi"
+                cpu: "100m"
+              limits:
+                memory: "512Mi"
+                cpu: "500m"
+          volumes:
+          - name: backup-storage
+            persistentVolumeClaim:
+              claimName: backup-pvc
+          - name: tmp
+            emptyDir: {}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: erpnext-files-backup
+  namespace: erpnext
+  labels:
+    app: erpnext
+    component: backup
+    backup-type: files
+spec:
+  schedule: "0 3 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app: erpnext
+            component: backup
+            backup-type: files
+        spec:
+          serviceAccountName: erpnext-ksa
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            fsGroup: 1000
+          containers:
+          - name: files-backup
+            image: google/cloud-sdk:alpine
+            command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              
+              BACKUP_DATE=$(date +%Y%m%d_%H%M%S)
+              BACKUP_FILE="sites_backup_${BACKUP_DATE}.tar.gz"
+              
+              echo "Starting files backup: $BACKUP_FILE"
+              
+              # Create compressed backup of sites
+              tar -czf /tmp/$BACKUP_FILE -C /sites .
+              
+              # Upload to Google Cloud Storage
+              if command -v gsutil &> /dev/null; then
+                gsutil cp /tmp/$BACKUP_FILE gs://erpnext-backups/sites/
+                echo "Files backup uploaded to GCS: gs://erpnext-backups/sites/$BACKUP_FILE"
+              else
+                echo "gsutil not available, copying to backup volume"
+                cp /tmp/$BACKUP_FILE /backup/
+              fi
+              
+              # Clean up
+              rm /tmp/$BACKUP_FILE
+              
+              echo "Files backup completed successfully!"
+            securityContext:
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              runAsNonRoot: true
+              runAsUser: 1000
+              runAsGroup: 1000
+              capabilities:
+                drop:
+                - ALL
+            volumeMounts:
+            - name: sites-data
+              mountPath: /sites
+              readOnly: true
+            - name: backup-storage
+              mountPath: /backup
+            - name: tmp
+              mountPath: /tmp
+            resources:
+              requests:
+                memory: "256Mi"
+                cpu: "100m"
+              limits:
+                memory: "512Mi"
+                cpu: "500m"
+          volumes:
+          - name: sites-data
+            persistentVolumeClaim:
+              claimName: erpnext-sites-pvc
+          - name: backup-storage
+            persistentVolumeClaim:
+              claimName: backup-pvc
+          - name: tmp
+            emptyDir: {}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: erpnext-migrate
+  namespace: erpnext
+  labels:
+    app: erpnext
+    component: maintenance
+    job-type: migrate
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: erpnext
+        component: maintenance
+        job-type: migrate
+    spec:
+      serviceAccountName: erpnext-ksa
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+      - name: migrate
+        image: frappe/erpnext-worker:v14
+        command:
+        - bash
+        - -c
+        - |
+          set -e
+          echo "Starting ERPNext migration..."
+          
+          # Run database migrations
+          bench --site all migrate
+          
+          # Clear cache
+          bench --site all clear-cache
+          
+          # Rebuild search index if needed
+          # bench --site all rebuild-index
+          
+          echo "Migration completed successfully!"
+        envFrom:
+        - configMapRef:
+            name: erpnext-config
+        env:
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-secrets
+              key: db-password
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: sites-data
+          mountPath: /home/frappe/frappe-bench/sites
+        - name: tmp
+          mountPath: /tmp
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+      volumes:
+      - name: sites-data
+        persistentVolumeClaim:
+          claimName: erpnext-sites-pvc
+      - name: tmp
+        emptyDir: {}

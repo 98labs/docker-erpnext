@@ -1,0 +1,155 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: erpnext-config
+  namespace: erpnext
+  labels:
+    app: erpnext
+    component: config
+data:
+  APP_VERSION: "v14"
+  APP_URL: "erpnext.yourdomain.com"
+  APP_USER: "Administrator"
+  APP_DB_PARAM: "db"
+  DEVELOPER_MODE: "0"
+  ENABLE_SCHEDULER: "1"
+  SOCKETIO_PORT: "9000"
+  REDIS_CACHE_URL: "redis://redis:6379/0"
+  REDIS_QUEUE_URL: "redis://redis:6379/1"
+  REDIS_SOCKETIO_URL: "redis://redis:6379/2"
+  DB_HOST: "mariadb"
+  DB_PORT: "3306"
+  DB_NAME: "erpnext"
+  DB_USER: "erpnext"
+  # Database connection pool settings
+  DB_POOL_SIZE: "20"
+  DB_MAX_OVERFLOW: "30"
+  DB_POOL_TIMEOUT: "30"
+  # Performance settings
+  WORKER_PROCESSES: "4"
+  WORKER_TIMEOUT: "120"
+  WORKER_MAX_REQUESTS: "1000"
+  WORKER_MAX_REQUESTS_JITTER: "50"
+  # Logging settings
+  LOG_LEVEL: "INFO"
+  LOG_FORMAT: "json"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-config
+  namespace: erpnext
+  labels:
+    app: erpnext
+    component: nginx
+data:
+  nginx.conf: |
+    user nginx;
+    worker_processes auto;
+    error_log /var/log/nginx/error.log notice;
+    pid /var/run/nginx.pid;
+
+    events {
+        worker_connections 1024;
+        use epoll;
+        multi_accept on;
+    }
+
+    http {
+        include /etc/nginx/mime.types;
+        default_type application/octet-stream;
+
+        log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                        '$status $body_bytes_sent "$http_referer" '
+                        '"$http_user_agent" "$http_x_forwarded_for"';
+
+        access_log /var/log/nginx/access.log main;
+
+        sendfile on;
+        tcp_nopush on;
+        tcp_nodelay on;
+        keepalive_timeout 65;
+        types_hash_max_size 2048;
+        client_max_body_size 50m;
+
+        gzip on;
+        gzip_vary on;
+        gzip_proxied any;
+        gzip_comp_level 6;
+        gzip_types
+            text/plain
+            text/css
+            text/xml
+            text/javascript
+            application/json
+            application/javascript
+            application/xml+rss
+            application/atom+xml
+            image/svg+xml;
+
+        upstream backend {
+            server erpnext-backend:8000;
+            keepalive 32;
+        }
+
+        upstream socketio {
+            server erpnext-backend:9000;
+            keepalive 32;
+        }
+
+        server {
+            listen 8080;
+            server_name _;
+            root /home/frappe/frappe-bench/sites;
+
+            # Security headers
+            add_header X-Frame-Options SAMEORIGIN;
+            add_header X-Content-Type-Options nosniff;
+            add_header X-XSS-Protection "1; mode=block";
+            add_header Referrer-Policy "strict-origin-when-cross-origin";
+
+            location /assets {
+                try_files $uri =404;
+                expires 1y;
+                add_header Cache-Control "public, immutable";
+            }
+
+            location ~ ^/protected/(.*) {
+                internal;
+                try_files /frontend/$1 =404;
+            }
+
+            location /socket.io/ {
+                proxy_http_version 1.1;
+                proxy_set_header Upgrade $http_upgrade;
+                proxy_set_header Connection "upgrade";
+                proxy_set_header X-Frappe-Site-Name frontend;
+                proxy_set_header Origin $scheme://$http_host;
+                proxy_set_header Host $host;
+                proxy_pass http://socketio;
+            }
+
+            location / {
+                try_files /frontend/public/$uri @webserver;
+            }
+
+            location @webserver {
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+                proxy_set_header X-Frappe-Site-Name frontend;
+                proxy_set_header Host $host;
+                proxy_set_header X-Use-X-Accel-Redirect True;
+                proxy_read_timeout 120;
+                proxy_redirect off;
+
+                proxy_pass http://backend;
+            }
+
+            # Health check endpoint
+            location /health {
+                access_log off;
+                return 200 "healthy\n";
+                add_header Content-Type text/plain;
+            }
+        }
+    }

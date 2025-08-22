@@ -1,0 +1,423 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: erpnext-queue-default
+  namespace: erpnext
+  labels:
+    app: erpnext-queue-default
+    component: worker
+    queue: default
+    environment: production
+    version: v14
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: erpnext-queue-default
+  template:
+    metadata:
+      labels:
+        app: erpnext-queue-default
+        component: worker
+        queue: default
+        environment: production
+        version: v14
+    spec:
+      serviceAccountName: erpnext-ksa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: queue-worker
+        image: frappe/erpnext-worker:v14
+        command:
+        - bench
+        - worker
+        - --queue
+        - default
+        envFrom:
+        - configMapRef:
+            name: erpnext-config
+        env:
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-secrets
+              key: db-password
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: sites-data
+          mountPath: /home/frappe/frappe-bench/sites
+        - name: tmp
+          mountPath: /tmp
+        - name: logs
+          mountPath: /home/frappe/frappe-bench/logs
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        livenessProbe:
+          exec:
+            command:
+            - pgrep
+            - -f
+            - "bench worker"
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+      volumes:
+      - name: sites-data
+        persistentVolumeClaim:
+          claimName: erpnext-sites-pvc
+      - name: tmp
+        emptyDir: {}
+      - name: logs
+        emptyDir: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: erpnext-queue-long
+  namespace: erpnext
+  labels:
+    app: erpnext-queue-long
+    component: worker
+    queue: long
+    environment: production
+    version: v14
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: erpnext-queue-long
+  template:
+    metadata:
+      labels:
+        app: erpnext-queue-long
+        component: worker
+        queue: long
+        environment: production
+        version: v14
+    spec:
+      serviceAccountName: erpnext-ksa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: queue-worker
+        image: frappe/erpnext-worker:v14
+        command:
+        - bench
+        - worker
+        - --queue
+        - long
+        envFrom:
+        - configMapRef:
+            name: erpnext-config
+        env:
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-secrets
+              key: db-password
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: sites-data
+          mountPath: /home/frappe/frappe-bench/sites
+        - name: tmp
+          mountPath: /tmp
+        - name: logs
+          mountPath: /home/frappe/frappe-bench/logs
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        livenessProbe:
+          exec:
+            command:
+            - pgrep
+            - -f
+            - "bench worker"
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+      volumes:
+      - name: sites-data
+        persistentVolumeClaim:
+          claimName: erpnext-sites-pvc
+      - name: tmp
+        emptyDir: {}
+      - name: logs
+        emptyDir: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: erpnext-queue-short
+  namespace: erpnext
+  labels:
+    app: erpnext-queue-short
+    component: worker
+    queue: short
+    environment: production
+    version: v14
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: erpnext-queue-short
+  template:
+    metadata:
+      labels:
+        app: erpnext-queue-short
+        component: worker
+        queue: short
+        environment: production
+        version: v14
+    spec:
+      serviceAccountName: erpnext-ksa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: queue-worker
+        image: frappe/erpnext-worker:v14
+        command:
+        - bench
+        - worker
+        - --queue
+        - short
+        envFrom:
+        - configMapRef:
+            name: erpnext-config
+        env:
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-secrets
+              key: db-password
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: sites-data
+          mountPath: /home/frappe/frappe-bench/sites
+        - name: tmp
+          mountPath: /tmp
+        - name: logs
+          mountPath: /home/frappe/frappe-bench/logs
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        livenessProbe:
+          exec:
+            command:
+            - pgrep
+            - -f
+            - "bench worker"
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+      volumes:
+      - name: sites-data
+        persistentVolumeClaim:
+          claimName: erpnext-sites-pvc
+      - name: tmp
+        emptyDir: {}
+      - name: logs
+        emptyDir: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: erpnext-scheduler
+  namespace: erpnext
+  labels:
+    app: erpnext-scheduler
+    component: scheduler
+    environment: production
+    version: v14
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: erpnext-scheduler
+  template:
+    metadata:
+      labels:
+        app: erpnext-scheduler
+        component: scheduler
+        environment: production
+        version: v14
+    spec:
+      serviceAccountName: erpnext-ksa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: scheduler
+        image: frappe/erpnext-worker:v14
+        command:
+        - bench
+        - schedule
+        envFrom:
+        - configMapRef:
+            name: erpnext-config
+        env:
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-secrets
+              key: db-password
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: sites-data
+          mountPath: /home/frappe/frappe-bench/sites
+        - name: tmp
+          mountPath: /tmp
+        - name: logs
+          mountPath: /home/frappe/frappe-bench/logs
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "250m"
+        livenessProbe:
+          exec:
+            command:
+            - pgrep
+            - -f
+            - "bench schedule"
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+      volumes:
+      - name: sites-data
+        persistentVolumeClaim:
+          claimName: erpnext-sites-pvc
+      - name: tmp
+        emptyDir: {}
+      - name: logs
+        emptyDir: {}
+      nodeSelector:
+        cloud.google.com/gke-preemptible: "false"
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: erpnext-queue-default-hpa
+  namespace: erpnext
+  labels:
+    app: erpnext-queue-default
+    component: worker
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: erpnext-queue-default
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: erpnext-queue-short-hpa
+  namespace: erpnext
+  labels:
+    app: erpnext-queue-short
+    component: worker
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: erpnext-queue-short
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
