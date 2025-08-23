@@ -1,0 +1,357 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: erpnext-site-init
+  namespace: erpnext
+  labels:
+    app: erpnext
+    component: site-init
+spec:
+  ttlSecondsAfterFinished: 3600
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: erpnext
+        component: site-init
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: erpnext-sa
+      restartPolicy: OnFailure
+      volumes:
+      - name: sites
+        persistentVolumeClaim:
+          claimName: erpnext-sites
+      - name: secrets-store
+        csi:
+          driver: secrets-store.csi.k8s.io
+          readOnly: true
+          volumeAttributes:
+            secretProviderClass: erpnext-secrets
+      initContainers:
+      - name: wait-for-db
+        image: postgres:13-alpine
+        command: 
+        - sh
+        - -c
+        - |
+          until pg_isready -h ${DB_HOST} -p 5432 -U ${DB_USER}; do
+            echo "Waiting for database to be ready..."
+            sleep 5
+          done
+          echo "Database is ready!"
+        env:
+        - name: DB_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: erpnext-config
+              key: DB_HOST
+        - name: DB_USER
+          valueFrom:
+            configMapKeyRef:
+              name: erpnext-config
+              key: DB_USER
+      containers:
+      - name: site-init
+        image: frappe/erpnext-worker:v14
+        imagePullPolicy: Always
+        command: 
+        - /bin/bash
+        - -c
+        - |
+          set -e
+          echo "Starting ERPNext site initialization..."
+          
+          # Check if site already exists
+          if [ -d "/home/frappe/frappe-bench/sites/frontend" ]; then
+            echo "Site 'frontend' already exists. Running migrations..."
+            bench --site frontend migrate
+          else
+            echo "Creating new site 'frontend'..."
+            bench new-site frontend \
+              --db-type postgres \
+              --db-host ${DB_HOST} \
+              --db-port 5432 \
+              --db-name erpnext \
+              --db-user ${POSTGRES_USER} \
+              --db-password ${POSTGRES_PASSWORD} \
+              --admin-password ${ADMIN_PASSWORD} \
+              --no-mariadb-socket \
+              --install-app erpnext \
+              --set-default
+          fi
+          
+          # Set site configuration
+          bench --site frontend set-config db_type postgres
+          bench --site frontend set-config redis_cache "rediss://:${REDIS_PASSWORD}@${REDIS_HOST}:${REDIS_PORT}/0?ssl_cert_reqs=required"
+          bench --site frontend set-config redis_queue "rediss://:${REDIS_PASSWORD}@${REDIS_HOST}:${REDIS_PORT}/1?ssl_cert_reqs=required"
+          bench --site frontend set-config redis_socketio "rediss://:${REDIS_PASSWORD}@${REDIS_HOST}:${REDIS_PORT}/2?ssl_cert_reqs=required"
+          
+          # Enable scheduler
+          bench --site frontend scheduler enable
+          
+          # Clear cache
+          bench --site frontend clear-cache
+          
+          echo "Site initialization completed successfully!"
+        volumeMounts:
+        - name: sites
+          mountPath: /home/frappe/frappe-bench/sites
+        - name: secrets-store
+          mountPath: /mnt/secrets-store
+          readOnly: true
+        env:
+        - name: DB_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: erpnext-config
+              key: DB_HOST
+        - name: POSTGRES_USER
+          valueFrom:
+            configMapKeyRef:
+              name: erpnext-config
+              key: DB_USER
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-secrets
+              key: db-password
+        - name: REDIS_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: erpnext-config
+              key: REDIS_HOST
+        - name: REDIS_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: erpnext-config
+              key: REDIS_PORT
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-secrets
+              key: redis-key
+        - name: ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-secrets
+              key: admin-password
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+          limits:
+            cpu: 2000m
+            memory: 2Gi
+      imagePullSecrets:
+      - name: acr-secret
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: erpnext-backup
+  namespace: erpnext
+  labels:
+    app: erpnext
+    component: backup
+spec:
+  schedule: "0 2 * * *"  # Daily at 2 AM
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app: erpnext
+            component: backup
+            azure.workload.identity/use: "true"
+        spec:
+          serviceAccountName: erpnext-sa
+          restartPolicy: OnFailure
+          volumes:
+          - name: sites
+            persistentVolumeClaim:
+              claimName: erpnext-sites
+          - name: secrets-store
+            csi:
+              driver: secrets-store.csi.k8s.io
+              readOnly: true
+              volumeAttributes:
+                secretProviderClass: erpnext-secrets
+          containers:
+          - name: backup
+            image: frappe/erpnext-worker:v14
+            imagePullPolicy: Always
+            command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              echo "Starting backup at $(date)"
+              
+              # Create backup
+              bench --site frontend backup --with-files
+              
+              # Upload to Azure Storage
+              BACKUP_PATH="/home/frappe/frappe-bench/sites/frontend/private/backups"
+              LATEST_DB_BACKUP=$(ls -t $BACKUP_PATH/*.sql.gz | head -1)
+              LATEST_FILES_BACKUP=$(ls -t $BACKUP_PATH/*.tar | head -1 || echo "")
+              
+              if [ -n "$LATEST_DB_BACKUP" ]; then
+                echo "Uploading database backup: $(basename $LATEST_DB_BACKUP)"
+                # Use Azure CLI or azcopy to upload to blob storage
+                # az storage blob upload \
+                #   --account-name ${STORAGE_ACCOUNT} \
+                #   --container-name erpnext-backups \
+                #   --name "$(date +%Y%m%d)/$(basename $LATEST_DB_BACKUP)" \
+                #   --file "$LATEST_DB_BACKUP" \
+                #   --auth-mode login
+              fi
+              
+              if [ -n "$LATEST_FILES_BACKUP" ]; then
+                echo "Uploading files backup: $(basename $LATEST_FILES_BACKUP)"
+                # az storage blob upload \
+                #   --account-name ${STORAGE_ACCOUNT} \
+                #   --container-name erpnext-backups \
+                #   --name "$(date +%Y%m%d)/$(basename $LATEST_FILES_BACKUP)" \
+                #   --file "$LATEST_FILES_BACKUP" \
+                #   --auth-mode login
+              fi
+              
+              # Clean up old local backups (keep last 7 days)
+              find $BACKUP_PATH -type f -mtime +7 -delete
+              
+              echo "Backup completed at $(date)"
+            volumeMounts:
+            - name: sites
+              mountPath: /home/frappe/frappe-bench/sites
+            - name: secrets-store
+              mountPath: /mnt/secrets-store
+              readOnly: true
+            env:
+            - name: DB_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: erpnext-config
+                  key: DB_HOST
+            - name: POSTGRES_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: erpnext-config
+                  key: DB_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: erpnext-secrets
+                  key: db-password
+            - name: STORAGE_ACCOUNT
+              valueFrom:
+                configMapKeyRef:
+                  name: erpnext-config
+                  key: STORAGE_ACCOUNT
+            resources:
+              requests:
+                cpu: 500m
+                memory: 1Gi
+              limits:
+                cpu: 1000m
+                memory: 2Gi
+          imagePullSecrets:
+          - name: acr-secret
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: erpnext-maintenance
+  namespace: erpnext
+  labels:
+    app: erpnext
+    component: maintenance
+spec:
+  schedule: "0 3 * * 0"  # Weekly on Sunday at 3 AM
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app: erpnext
+            component: maintenance
+            azure.workload.identity/use: "true"
+        spec:
+          serviceAccountName: erpnext-sa
+          restartPolicy: OnFailure
+          volumes:
+          - name: sites
+            persistentVolumeClaim:
+              claimName: erpnext-sites
+          - name: secrets-store
+            csi:
+              driver: secrets-store.csi.k8s.io
+              readOnly: true
+              volumeAttributes:
+                secretProviderClass: erpnext-secrets
+          containers:
+          - name: maintenance
+            image: frappe/erpnext-worker:v14
+            imagePullPolicy: Always
+            command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              echo "Starting maintenance tasks at $(date)"
+              
+              # Clear old logs
+              bench --site frontend clear-log-table --days 30
+              
+              # Clear old emails
+              bench --site frontend clear-email-queue --days 30
+              
+              # Optimize database
+              bench --site frontend optimize
+              
+              # Clear cache
+              bench --site frontend clear-cache
+              
+              # Run custom maintenance scripts if any
+              # bench --site frontend execute custom_app.maintenance.run
+              
+              echo "Maintenance completed at $(date)"
+            volumeMounts:
+            - name: sites
+              mountPath: /home/frappe/frappe-bench/sites
+            - name: secrets-store
+              mountPath: /mnt/secrets-store
+              readOnly: true
+            env:
+            - name: DB_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: erpnext-config
+                  key: DB_HOST
+            - name: POSTGRES_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: erpnext-config
+                  key: DB_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: erpnext-secrets
+                  key: db-password
+            resources:
+              requests:
+                cpu: 200m
+                memory: 512Mi
+              limits:
+                cpu: 500m
+                memory: 1Gi
+          imagePullSecrets:
+          - name: acr-secret

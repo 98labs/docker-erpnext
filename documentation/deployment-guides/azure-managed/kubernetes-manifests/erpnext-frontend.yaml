@@ -1,0 +1,194 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: erpnext-frontend
+  namespace: erpnext
+  labels:
+    app: erpnext-frontend
+    component: frontend
+    version: v14
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: erpnext-frontend
+  template:
+    metadata:
+      labels:
+        app: erpnext-frontend
+        component: frontend
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - erpnext-frontend
+              topologyKey: kubernetes.io/hostname
+      volumes:
+      - name: sites
+        persistentVolumeClaim:
+          claimName: erpnext-sites
+      - name: assets
+        persistentVolumeClaim:
+          claimName: erpnext-assets
+      - name: nginx-config
+        configMap:
+          name: nginx-config
+      containers:
+      - name: frontend
+        image: frappe/erpnext-nginx:v14
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        volumeMounts:
+        - name: sites
+          mountPath: /home/frappe/frappe-bench/sites
+          readOnly: true
+        - name: assets
+          mountPath: /usr/share/nginx/html/assets
+          readOnly: true
+        - name: nginx-config
+          mountPath: /etc/nginx/nginx.conf
+          subPath: nginx.conf
+        env:
+        - name: BACKEND
+          value: erpnext-backend:8000
+        - name: FRAPPE_SITE_NAME_HEADER
+          valueFrom:
+            configMapKeyRef:
+              name: erpnext-config
+              key: FRAPPE_SITE_NAME_HEADER
+        - name: SOCKETIO
+          value: erpnext-websocket:9000
+        - name: UPSTREAM_REAL_IP_ADDRESS
+          value: "127.0.0.1"
+        - name: UPSTREAM_REAL_IP_HEADER
+          value: "X-Forwarded-For"
+        - name: UPSTREAM_REAL_IP_RECURSIVE
+          value: "on"
+        - name: PROXY_READ_TIMEOUT
+          value: "120"
+        - name: CLIENT_MAX_BODY_SIZE
+          value: "50m"
+        resources:
+          requests:
+            cpu: 200m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        lifecycle:
+          preStop:
+            exec:
+              command: ["/bin/sh", "-c", "sleep 15"]
+      imagePullSecrets:
+      - name: acr-secret
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: erpnext-frontend
+  namespace: erpnext
+  labels:
+    app: erpnext-frontend
+  annotations:
+    service.beta.kubernetes.io/azure-load-balancer-internal: "false"
+spec:
+  type: ClusterIP
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 10800
+  ports:
+  - port: 8080
+    targetPort: 8080
+    protocol: TCP
+    name: http
+  selector:
+    app: erpnext-frontend
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: erpnext-frontend-hpa
+  namespace: erpnext
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: erpnext-frontend
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+      - type: Percent
+        value: 50
+        periodSeconds: 60
+      selectPolicy: Max
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 25
+        periodSeconds: 60
+      selectPolicy: Min
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: erpnext-frontend-pdb
+  namespace: erpnext
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: erpnext-frontend

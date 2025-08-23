@@ -1,0 +1,58 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: azure-files-premium
+provisioner: file.csi.azure.com
+allowVolumeExpansion: true
+parameters:
+  skuName: Premium_LRS
+  protocol: smb
+reclaimPolicy: Retain
+volumeBindingMode: Immediate
+mountOptions:
+  - dir_mode=0777
+  - file_mode=0777
+  - uid=1000
+  - gid=1000
+  - mfsymlinks
+  - cache=strict
+  - nosharesock
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: erpnext-sites
+  namespace: erpnext
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: azure-files-premium
+  resources:
+    requests:
+      storage: 50Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: erpnext-assets
+  namespace: erpnext
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: azure-files-premium
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: erpnext-logs
+  namespace: erpnext
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: azure-files-premium
+  resources:
+    requests:
+      storage: 10Gi

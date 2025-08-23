@@ -1,0 +1,291 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: erpnext-backend
+  namespace: erpnext
+  labels:
+    app: erpnext-backend
+    component: backend
+    version: v14
+spec:
+  replicas: 3
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: erpnext-backend
+  template:
+    metadata:
+      labels:
+        app: erpnext-backend
+        component: backend
+        azure.workload.identity/use: "true"
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: erpnext-sa
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - erpnext-backend
+              topologyKey: kubernetes.io/hostname
+      volumes:
+      - name: sites
+        persistentVolumeClaim:
+          claimName: erpnext-sites
+      - name: assets
+        persistentVolumeClaim:
+          claimName: erpnext-assets
+      - name: logs
+        persistentVolumeClaim:
+          claimName: erpnext-logs
+      - name: secrets-store
+        csi:
+          driver: secrets-store.csi.k8s.io
+          readOnly: true
+          volumeAttributes:
+            secretProviderClass: erpnext-secrets
+      initContainers:
+      - name: wait-for-db
+        image: postgres:13-alpine
+        command: ['sh', '-c', 'until pg_isready -h ${DB_HOST} -p 5432; do echo waiting for database; sleep 2; done;']
+        env:
+        - name: DB_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: erpnext-config
+              key: DB_HOST
+      containers:
+      - name: backend
+        image: frappe/erpnext-worker:v14
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+          name: http
+          protocol: TCP
+        volumeMounts:
+        - name: sites
+          mountPath: /home/frappe/frappe-bench/sites
+        - name: assets
+          mountPath: /home/frappe/frappe-bench/sites/assets
+        - name: logs
+          mountPath: /home/frappe/frappe-bench/logs
+        - name: secrets-store
+          mountPath: /mnt/secrets-store
+          readOnly: true
+        env:
+        - name: DB_TYPE
+          valueFrom:
+            configMapKeyRef:
+              name: erpnext-config
+              key: DB_TYPE
+        - name: DB_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: erpnext-config
+              key: DB_HOST
+        - name: DB_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: erpnext-config
+              key: DB_PORT
+        - name: DB_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: erpnext-config
+              key: DB_NAME
+        - name: POSTGRES_USER
+          valueFrom:
+            configMapKeyRef:
+              name: erpnext-config
+              key: DB_USER
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-secrets
+              key: db-password
+        - name: REDIS_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: erpnext-config
+              key: REDIS_HOST
+        - name: REDIS_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: erpnext-config
+              key: REDIS_PORT
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-secrets
+              key: redis-key
+        - name: REDIS_CACHE
+          value: "rediss://:$(REDIS_PASSWORD)@$(REDIS_HOST):$(REDIS_PORT)/0?ssl_cert_reqs=required"
+        - name: REDIS_QUEUE
+          value: "rediss://:$(REDIS_PASSWORD)@$(REDIS_HOST):$(REDIS_PORT)/1?ssl_cert_reqs=required"
+        - name: REDIS_SOCKETIO
+          value: "rediss://:$(REDIS_PASSWORD)@$(REDIS_HOST):$(REDIS_PORT)/2?ssl_cert_reqs=required"
+        - name: ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-secrets
+              key: admin-password
+        - name: ENCRYPTION_KEY
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-secrets
+              key: encryption-key
+        - name: WORKER_CLASS
+          valueFrom:
+            configMapKeyRef:
+              name: erpnext-config
+              key: WORKER_CLASS
+        - name: GUNICORN_WORKERS
+          valueFrom:
+            configMapKeyRef:
+              name: erpnext-config
+              key: GUNICORN_WORKERS
+        - name: GUNICORN_THREADS
+          valueFrom:
+            configMapKeyRef:
+              name: erpnext-config
+              key: GUNICORN_THREADS
+        - name: GUNICORN_TIMEOUT
+          valueFrom:
+            configMapKeyRef:
+              name: erpnext-config
+              key: GUNICORN_TIMEOUT
+        - name: APPLICATIONINSIGHTS_CONNECTION_STRING
+          valueFrom:
+            configMapKeyRef:
+              name: erpnext-config
+              key: APPLICATIONINSIGHTS_CONNECTION_STRING
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+          limits:
+            cpu: 2000m
+            memory: 4Gi
+        livenessProbe:
+          httpGet:
+            path: /api/method/ping
+            port: 8000
+            httpHeaders:
+            - name: X-Frappe-Site-Name
+              value: frontend
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /api/method/ping
+            port: 8000
+            httpHeaders:
+            - name: X-Frappe-Site-Name
+              value: frontend
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        lifecycle:
+          preStop:
+            exec:
+              command: ["/bin/sh", "-c", "sleep 15"]
+      imagePullSecrets:
+      - name: acr-secret
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: erpnext-backend
+  namespace: erpnext
+  labels:
+    app: erpnext-backend
+  annotations:
+    service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+spec:
+  type: ClusterIP
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 10800
+  ports:
+  - port: 8000
+    targetPort: 8000
+    protocol: TCP
+    name: http
+  selector:
+    app: erpnext-backend
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: erpnext-backend-hpa
+  namespace: erpnext
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: erpnext-backend
+  minReplicas: 3
+  maxReplicas: 15
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+      - type: Percent
+        value: 50
+        periodSeconds: 60
+      - type: Pods
+        value: 2
+        periodSeconds: 60
+      selectPolicy: Max
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 25
+        periodSeconds: 60
+      - type: Pods
+        value: 1
+        periodSeconds: 60
+      selectPolicy: Min
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: erpnext-backend-pdb
+  namespace: erpnext
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: erpnext-backend

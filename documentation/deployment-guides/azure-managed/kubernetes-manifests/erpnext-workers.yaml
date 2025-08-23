@@ -1,0 +1,501 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: erpnext-worker-default
+  namespace: erpnext
+  labels:
+    app: erpnext-worker-default
+    component: worker
+    queue: default
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: erpnext-worker-default
+  template:
+    metadata:
+      labels:
+        app: erpnext-worker-default
+        component: worker
+        queue: default
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: erpnext-sa
+      volumes:
+      - name: sites
+        persistentVolumeClaim:
+          claimName: erpnext-sites
+      - name: logs
+        persistentVolumeClaim:
+          claimName: erpnext-logs
+      - name: secrets-store
+        csi:
+          driver: secrets-store.csi.k8s.io
+          readOnly: true
+          volumeAttributes:
+            secretProviderClass: erpnext-secrets
+      containers:
+      - name: worker
+        image: frappe/erpnext-worker:v14
+        imagePullPolicy: Always
+        command: ["bench", "worker", "--queue", "default"]
+        volumeMounts:
+        - name: sites
+          mountPath: /home/frappe/frappe-bench/sites
+        - name: logs
+          mountPath: /home/frappe/frappe-bench/logs
+        - name: secrets-store
+          mountPath: /mnt/secrets-store
+          readOnly: true
+        env:
+        - name: DB_TYPE
+          valueFrom:
+            configMapKeyRef:
+              name: erpnext-config
+              key: DB_TYPE
+        - name: DB_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: erpnext-config
+              key: DB_HOST
+        - name: POSTGRES_USER
+          valueFrom:
+            configMapKeyRef:
+              name: erpnext-config
+              key: DB_USER
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-secrets
+              key: db-password
+        - name: REDIS_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: erpnext-config
+              key: REDIS_HOST
+        - name: REDIS_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: erpnext-config
+              key: REDIS_PORT
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-secrets
+              key: redis-key
+        - name: REDIS_CACHE
+          value: "rediss://:$(REDIS_PASSWORD)@$(REDIS_HOST):$(REDIS_PORT)/0?ssl_cert_reqs=required"
+        - name: REDIS_QUEUE
+          value: "rediss://:$(REDIS_PASSWORD)@$(REDIS_HOST):$(REDIS_PORT)/1?ssl_cert_reqs=required"
+        resources:
+          requests:
+            cpu: 300m
+            memory: 512Mi
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+      imagePullSecrets:
+      - name: acr-secret
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: erpnext-worker-long
+  namespace: erpnext
+  labels:
+    app: erpnext-worker-long
+    component: worker
+    queue: long
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: erpnext-worker-long
+  template:
+    metadata:
+      labels:
+        app: erpnext-worker-long
+        component: worker
+        queue: long
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: erpnext-sa
+      volumes:
+      - name: sites
+        persistentVolumeClaim:
+          claimName: erpnext-sites
+      - name: logs
+        persistentVolumeClaim:
+          claimName: erpnext-logs
+      - name: secrets-store
+        csi:
+          driver: secrets-store.csi.k8s.io
+          readOnly: true
+          volumeAttributes:
+            secretProviderClass: erpnext-secrets
+      containers:
+      - name: worker
+        image: frappe/erpnext-worker:v14
+        imagePullPolicy: Always
+        command: ["bench", "worker", "--queue", "long"]
+        volumeMounts:
+        - name: sites
+          mountPath: /home/frappe/frappe-bench/sites
+        - name: logs
+          mountPath: /home/frappe/frappe-bench/logs
+        - name: secrets-store
+          mountPath: /mnt/secrets-store
+          readOnly: true
+        env:
+        - name: DB_TYPE
+          valueFrom:
+            configMapKeyRef:
+              name: erpnext-config
+              key: DB_TYPE
+        - name: DB_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: erpnext-config
+              key: DB_HOST
+        - name: POSTGRES_USER
+          valueFrom:
+            configMapKeyRef:
+              name: erpnext-config
+              key: DB_USER
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-secrets
+              key: db-password
+        - name: REDIS_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: erpnext-config
+              key: REDIS_HOST
+        - name: REDIS_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: erpnext-config
+              key: REDIS_PORT
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-secrets
+              key: redis-key
+        resources:
+          requests:
+            cpu: 300m
+            memory: 512Mi
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+      imagePullSecrets:
+      - name: acr-secret
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: erpnext-worker-short
+  namespace: erpnext
+  labels:
+    app: erpnext-worker-short
+    component: worker
+    queue: short
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: erpnext-worker-short
+  template:
+    metadata:
+      labels:
+        app: erpnext-worker-short
+        component: worker
+        queue: short
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: erpnext-sa
+      volumes:
+      - name: sites
+        persistentVolumeClaim:
+          claimName: erpnext-sites
+      - name: logs
+        persistentVolumeClaim:
+          claimName: erpnext-logs
+      - name: secrets-store
+        csi:
+          driver: secrets-store.csi.k8s.io
+          readOnly: true
+          volumeAttributes:
+            secretProviderClass: erpnext-secrets
+      containers:
+      - name: worker
+        image: frappe/erpnext-worker:v14
+        imagePullPolicy: Always
+        command: ["bench", "worker", "--queue", "short"]
+        volumeMounts:
+        - name: sites
+          mountPath: /home/frappe/frappe-bench/sites
+        - name: logs
+          mountPath: /home/frappe/frappe-bench/logs
+        - name: secrets-store
+          mountPath: /mnt/secrets-store
+          readOnly: true
+        env:
+        - name: DB_TYPE
+          valueFrom:
+            configMapKeyRef:
+              name: erpnext-config
+              key: DB_TYPE
+        - name: DB_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: erpnext-config
+              key: DB_HOST
+        - name: POSTGRES_USER
+          valueFrom:
+            configMapKeyRef:
+              name: erpnext-config
+              key: DB_USER
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-secrets
+              key: db-password
+        - name: REDIS_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: erpnext-config
+              key: REDIS_HOST
+        - name: REDIS_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: erpnext-config
+              key: REDIS_PORT
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-secrets
+              key: redis-key
+        resources:
+          requests:
+            cpu: 300m
+            memory: 512Mi
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+      imagePullSecrets:
+      - name: acr-secret
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: erpnext-scheduler
+  namespace: erpnext
+  labels:
+    app: erpnext-scheduler
+    component: scheduler
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: erpnext-scheduler
+  template:
+    metadata:
+      labels:
+        app: erpnext-scheduler
+        component: scheduler
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: erpnext-sa
+      volumes:
+      - name: sites
+        persistentVolumeClaim:
+          claimName: erpnext-sites
+      - name: logs
+        persistentVolumeClaim:
+          claimName: erpnext-logs
+      - name: secrets-store
+        csi:
+          driver: secrets-store.csi.k8s.io
+          readOnly: true
+          volumeAttributes:
+            secretProviderClass: erpnext-secrets
+      containers:
+      - name: scheduler
+        image: frappe/erpnext-worker:v14
+        imagePullPolicy: Always
+        command: ["bench", "schedule"]
+        volumeMounts:
+        - name: sites
+          mountPath: /home/frappe/frappe-bench/sites
+        - name: logs
+          mountPath: /home/frappe/frappe-bench/logs
+        - name: secrets-store
+          mountPath: /mnt/secrets-store
+          readOnly: true
+        env:
+        - name: DB_TYPE
+          valueFrom:
+            configMapKeyRef:
+              name: erpnext-config
+              key: DB_TYPE
+        - name: DB_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: erpnext-config
+              key: DB_HOST
+        - name: POSTGRES_USER
+          valueFrom:
+            configMapKeyRef:
+              name: erpnext-config
+              key: DB_USER
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-secrets
+              key: db-password
+        - name: REDIS_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: erpnext-config
+              key: REDIS_HOST
+        - name: REDIS_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: erpnext-config
+              key: REDIS_PORT
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: erpnext-secrets
+              key: redis-key
+        resources:
+          requests:
+            cpu: 200m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+      imagePullSecrets:
+      - name: acr-secret
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: erpnext-websocket
+  namespace: erpnext
+  labels:
+    app: erpnext-websocket
+    component: websocket
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: erpnext-websocket
+  template:
+    metadata:
+      labels:
+        app: erpnext-websocket
+        component: websocket
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - erpnext-websocket
+              topologyKey: kubernetes.io/hostname
+      volumes:
+      - name: sites
+        persistentVolumeClaim:
+          claimName: erpnext-sites
+      containers:
+      - name: websocket
+        image: frappe/frappe-socketio:v14
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 9000
+          name: websocket
+          protocol: TCP
+        volumeMounts:
+        - name: sites
+          mountPath: /home/frappe/frappe-bench/sites
+          readOnly: true
+        resources:
+          requests:
+            cpu: 200m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        livenessProbe:
+          tcpSocket:
+            port: 9000
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          tcpSocket:
+            port: 9000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+      imagePullSecrets:
+      - name: acr-secret
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: erpnext-websocket
+  namespace: erpnext
+  labels:
+    app: erpnext-websocket
+spec:
+  type: ClusterIP
+  sessionAffinity: ClientIP
+  ports:
+  - port: 9000
+    targetPort: 9000
+    protocol: TCP
+    name: websocket
+  selector:
+    app: erpnext-websocket
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: erpnext-worker-default-hpa
+  namespace: erpnext
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: erpnext-worker-default
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80

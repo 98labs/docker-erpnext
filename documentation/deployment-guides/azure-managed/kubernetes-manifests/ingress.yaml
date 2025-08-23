@@ -1,0 +1,182 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: erpnext-ingress
+  namespace: erpnext
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    
+    # SSL/TLS Configuration
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/ssl-protocols: "TLSv1.2 TLSv1.3"
+    nginx.ingress.kubernetes.io/ssl-ciphers: "TLS_AES_128_GCM_SHA256,TLS_AES_256_GCM_SHA384,TLS_CHACHA20_POLY1305_SHA256"
+    
+    # Proxy Configuration
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "120"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "120"
+    nginx.ingress.kubernetes.io/proxy-buffer-size: "8k"
+    nginx.ingress.kubernetes.io/proxy-buffers-number: "8"
+    
+    # WebSocket Support
+    nginx.ingress.kubernetes.io/websocket-services: "erpnext-websocket"
+    nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
+    
+    # Security Headers
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      more_set_headers "X-Frame-Options: SAMEORIGIN";
+      more_set_headers "X-Content-Type-Options: nosniff";
+      more_set_headers "X-XSS-Protection: 1; mode=block";
+      more_set_headers "Referrer-Policy: strict-origin-when-cross-origin";
+      more_set_headers "Content-Security-Policy: default-src 'self' 'unsafe-inline' 'unsafe-eval' https: data: blob:";
+      more_set_headers "Permissions-Policy: geolocation=(), microphone=(), camera=()";
+    
+    # Rate Limiting
+    nginx.ingress.kubernetes.io/limit-rps: "20"
+    nginx.ingress.kubernetes.io/limit-rpm: "200"
+    nginx.ingress.kubernetes.io/limit-connections: "10"
+    
+    # Session Affinity
+    nginx.ingress.kubernetes.io/affinity: "cookie"
+    nginx.ingress.kubernetes.io/affinity-mode: "persistent"
+    nginx.ingress.kubernetes.io/session-cookie-name: "erpnext-session"
+    nginx.ingress.kubernetes.io/session-cookie-max-age: "86400"
+    nginx.ingress.kubernetes.io/session-cookie-change-on-failure: "true"
+    
+    # CORS Configuration (if needed)
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, PUT, DELETE, OPTIONS"
+    nginx.ingress.kubernetes.io/cors-allow-headers: "DNT,X-CustomHeader,Keep-Alive,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Authorization,X-Frappe-Site-Name"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "*"
+    nginx.ingress.kubernetes.io/cors-allow-credentials: "true"
+    
+    # Azure Application Gateway specific (if using AGIC)
+    # appgw.ingress.kubernetes.io/use-private-ip: "false"
+    # appgw.ingress.kubernetes.io/backend-protocol: "http"
+    # appgw.ingress.kubernetes.io/cookie-based-affinity: "true"
+    # appgw.ingress.kubernetes.io/request-timeout: "120"
+    # appgw.ingress.kubernetes.io/connection-draining: "true"
+    # appgw.ingress.kubernetes.io/connection-draining-timeout: "30"
+    
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - ${DOMAIN}
+    - www.${DOMAIN}
+    secretName: erpnext-tls
+  rules:
+  - host: ${DOMAIN}
+    http:
+      paths:
+      # WebSocket endpoint
+      - path: /socket.io
+        pathType: Prefix
+        backend:
+          service:
+            name: erpnext-websocket
+            port:
+              number: 9000
+      
+      # API endpoints (higher priority)
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: erpnext-backend
+            port:
+              number: 8000
+      
+      # Assets and files
+      - path: /assets
+        pathType: Prefix
+        backend:
+          service:
+            name: erpnext-frontend
+            port:
+              number: 8080
+      
+      - path: /files
+        pathType: Prefix
+        backend:
+          service:
+            name: erpnext-frontend
+            port:
+              number: 8080
+      
+      # Default route
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: erpnext-frontend
+            port:
+              number: 8080
+  
+  # Redirect www to non-www
+  - host: www.${DOMAIN}
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: erpnext-frontend
+            port:
+              number: 8080
+---
+# Alternative Ingress for Application Gateway Ingress Controller (AGIC)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: erpnext-ingress-agic
+  namespace: erpnext
+  annotations:
+    kubernetes.io/ingress.class: azure/application-gateway
+    appgw.ingress.kubernetes.io/ssl-redirect: "true"
+    appgw.ingress.kubernetes.io/use-private-ip: "false"
+    appgw.ingress.kubernetes.io/backend-protocol: "http"
+    appgw.ingress.kubernetes.io/backend-hostname: "erpnext-backend"
+    appgw.ingress.kubernetes.io/cookie-based-affinity: "true"
+    appgw.ingress.kubernetes.io/request-timeout: "120"
+    appgw.ingress.kubernetes.io/connection-draining: "true"
+    appgw.ingress.kubernetes.io/connection-draining-timeout: "30"
+    appgw.ingress.kubernetes.io/health-probe-path: "/api/method/ping"
+    appgw.ingress.kubernetes.io/health-probe-interval: "30"
+    appgw.ingress.kubernetes.io/health-probe-timeout: "10"
+    appgw.ingress.kubernetes.io/health-probe-unhealthy-threshold: "3"
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  tls:
+  - hosts:
+    - ${DOMAIN}
+    secretName: erpnext-tls-agic
+  rules:
+  - host: ${DOMAIN}
+    http:
+      paths:
+      - path: /socket.io/*
+        pathType: Prefix
+        backend:
+          service:
+            name: erpnext-websocket
+            port:
+              number: 9000
+      - path: /api/*
+        pathType: Prefix
+        backend:
+          service:
+            name: erpnext-backend
+            port:
+              number: 8000
+      - path: /*
+        pathType: Prefix
+        backend:
+          service:
+            name: erpnext-frontend
+            port:
+              number: 8080
